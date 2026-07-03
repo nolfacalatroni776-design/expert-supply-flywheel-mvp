@@ -9,6 +9,7 @@ import {
   TrialResultForm,
 } from "@/components/candidate-action-forms";
 import { CreateProjectForm } from "@/components/create-project-form";
+import { DynamicLogo } from "@/components/dynamic-logo";
 import { ExpertQualityEventForm } from "@/components/supply-action-forms";
 import { canApproveForOutreach } from "@/lib/gates";
 import { parseJson } from "@/lib/json";
@@ -221,7 +222,7 @@ export default async function Home({ searchParams }: PageProps) {
         <aside className="hidden h-screen overflow-hidden border-r border-[#e7e7e2] bg-white lg:flex lg:flex-col">
           <div className="px-4 pb-4 pt-5">
             <div className="flex items-center gap-3">
-              <span className="inline-flex size-9 items-center justify-center rounded-lg bg-[#28251e] text-sm font-bold text-white">ER</span>
+              <DynamicLogo />
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-[#28251e]">专家供给增长</p>
                 <p className="truncate text-xs text-[#7a7469]">招募运营工作台</p>
@@ -285,7 +286,7 @@ export default async function Home({ searchParams }: PageProps) {
           <div className="mx-auto grid w-full max-w-[1440px] gap-4 px-4 py-4 sm:px-6 lg:px-8">
             <div className="flex items-center justify-between gap-3 lg:hidden">
               <div className="flex min-w-0 items-center gap-3">
-                <span className="inline-flex size-9 items-center justify-center rounded-lg bg-[#28251e] text-sm font-bold text-white">ER</span>
+                <DynamicLogo />
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">专家供给增长工作台</p>
                   <p className="truncate text-xs text-[#7a7469]">招募运营工作台</p>
