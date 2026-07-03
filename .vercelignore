@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+.git
+.next
+node_modules
+prisma/dev.db
+prisma/.init.sql
+*.db
+*.sqlite
+*.sqlite3
+tsconfig.tsbuildinfo
