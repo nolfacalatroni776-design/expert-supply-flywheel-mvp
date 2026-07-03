@@ -1,0 +1,630 @@
+import { z } from "zod";
+import {
+  CONSENT_STATES,
+  EVIDENCE_LEVELS,
+  MARKETING_CHANNELS,
+  MARKETING_POST_STATUSES,
+  PIPELINE_STAGES,
+  RISK_LEVELS,
+} from "./constants";
+
+export const pipelineStageSchema = z.enum(PIPELINE_STAGES);
+export const evidenceLevelSchema = z.enum(EVIDENCE_LEVELS);
+export const riskLevelSchema = z.enum(RISK_LEVELS);
+export const consentStateSchema = z.enum(CONSENT_STATES);
+export const marketingChannelSchema = z.enum(MARKETING_CHANNELS);
+export const marketingPostStatusSchema = z.enum(MARKETING_POST_STATUSES);
+
+export const createProjectSchema = z.object({
+  title: z.string().trim().min(3),
+  rawDemand: z.string().trim().min(20),
+  domain: z.string().trim().optional(),
+  taskType: z.string().trim().optional(),
+  quantity: z.coerce.number().int().positive().optional(),
+  budgetMin: z.coerce.number().nonnegative().optional(),
+  budgetMax: z.coerce.number().nonnegative().optional(),
+  languages: z.array(z.string().trim().min(1)).default([]),
+  regions: z.array(z.string().trim().min(1)).default([]),
+});
+
+const stringArraySchema = z
+  .union([
+    z.array(z.union([z.string(), z.number(), z.boolean()])),
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+  ])
+  .optional()
+  .transform((value) => {
+    if (value === null || value === undefined) return [];
+    const items = Array.isArray(value) ? value : [value];
+    return items.map((item) => String(item).trim()).filter(Boolean);
+  });
+
+const nullablePositiveIntSchema = z
+  .union([z.number(), z.string(), z.null(), z.undefined()])
+  .transform((value) => {
+    if (value === null || value === undefined || value === "") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : null;
+  });
+
+const nullableNonnegativeNumberSchema = z
+  .union([z.number(), z.string(), z.null(), z.undefined()])
+  .transform((value) => {
+    if (value === null || value === undefined || value === "") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  });
+
+const searchQueryItemSchema = z
+  .union([z.string(), z.record(z.string(), z.unknown())])
+  .transform((value) => {
+    if (typeof value === "string") return value.trim();
+    const preferredKeys = ["query", "q", "searchQuery", "search_query", "keyword", "keywords"];
+    for (const key of preferredKeys) {
+      const item = value[key];
+      if (typeof item === "string" && item.trim()) return item.trim();
+    }
+    const firstString = Object.values(value).find((item) => typeof item === "string" && item.trim().length > 0);
+    return typeof firstString === "string" ? firstString.trim() : "";
+  });
+
+export const analyzeProjectOutputSchema = z.object({
+  title: z.string().default(""),
+  domain: z.string().default(""),
+  taskType: z.string().default(""),
+  quantity: nullablePositiveIntSchema.default(null),
+  budgetMin: nullableNonnegativeNumberSchema.default(null),
+  budgetMax: nullableNonnegativeNumberSchema.default(null),
+  languages: stringArraySchema,
+  regions: stringArraySchema,
+  riskLevel: riskLevelSchema.catch("medium"),
+  persona: z
+    .object({
+      summary: z.string().default(""),
+      mustHave: stringArraySchema,
+      niceToHave: stringArraySchema,
+      exclude: stringArraySchema,
+      taskFitSignals: stringArraySchema,
+      evidenceRequirements: stringArraySchema,
+      humanReviewPoints: stringArraySchema,
+    })
+    .default({
+      summary: "",
+      mustHave: [],
+      niceToHave: [],
+      exclude: [],
+      taskFitSignals: [],
+      evidenceRequirements: [],
+      humanReviewPoints: [],
+    }),
+  searchQueries: z
+    .array(searchQueryItemSchema)
+    .default([])
+    .transform((queries) => Array.from(new Set(queries.map((query) => query.trim()).filter(Boolean))).slice(0, 8)),
+});
+
+export type AnalyzeProjectOutput = z.infer<typeof analyzeProjectOutputSchema>;
+
+export const searchResultSchema = z.object({
+  title: z.string(),
+  url: z.string().url(),
+  snippet: z.string().default(""),
+  position: z.number().int().optional(),
+});
+
+const nullableStringSchema = z
+  .union([z.string(), z.array(z.union([z.string(), z.number(), z.boolean()]))])
+  .optional()
+  .nullable()
+  .transform((value) => {
+    if (typeof value === "string") return value.trim() ? value.trim() : null;
+    if (Array.isArray(value)) {
+      const joined = value.map((item) => String(item).trim()).filter(Boolean).join(", ");
+      return joined || null;
+    }
+    return null;
+  });
+
+const candidateEvidenceClaimSchema = z.object({
+  claim: z.string().default("公开搜索结果显示该候选可能与项目需求相关"),
+  sourceUrl: z.string().url(),
+  sourceTitle: nullableStringSchema,
+  sourceType: z.string().default("public_web"),
+  snippet: z.string().default(""),
+  evidenceLevel: evidenceLevelSchema.catch("E1"),
+  confidence: z.number().min(0).max(1).catch(0.5),
+});
+
+export const extractedCandidateSchema = z.object({
+  name: z.string().min(1),
+  title: nullableStringSchema,
+  affiliation: nullableStringSchema,
+  sourceUrl: z.string().url(),
+  domainTags: stringArraySchema,
+  languages: stringArraySchema,
+  region: nullableStringSchema,
+  evidenceLevel: evidenceLevelSchema.catch("E1"),
+  claims: z.array(candidateEvidenceClaimSchema).default([]),
+  risks: stringArraySchema,
+}).transform((candidate) => ({
+  ...candidate,
+  claims: candidate.claims.length
+    ? candidate.claims
+    : [
+        {
+          claim: "公开搜索结果显示该候选可能与项目需求相关",
+          sourceUrl: candidate.sourceUrl,
+          sourceTitle: candidate.title ?? candidate.name,
+          sourceType: "public_web",
+          snippet: [candidate.title, candidate.affiliation, candidate.domainTags.join(", ")].filter(Boolean).join(" · "),
+          evidenceLevel: "E1" as const,
+          confidence: 0.45,
+        },
+      ],
+}));
+
+export const extractCandidatesOutputSchema = z
+  .union([
+    z.object({
+      candidates: z.array(extractedCandidateSchema).max(20),
+    }),
+    z.array(extractedCandidateSchema).max(20),
+  ])
+  .transform((output) => (Array.isArray(output) ? { candidates: output } : output));
+
+export type ExtractCandidatesOutput = z.infer<typeof extractCandidatesOutputSchema>;
+
+const scoreBreakdownItemSchema = z.object({
+  dimension: z.string().default("未命名维度"),
+  score: z.coerce.number().min(0).max(100).catch(50),
+  weight: z.coerce.number().min(0).max(100).catch(0),
+  evidence: z.string().default("未提供证据"),
+  reason: z.string().optional(),
+  explanation: z.string().optional(),
+  notes: z.string().optional(),
+}).transform((item) => ({
+  dimension: item.dimension,
+  score: Math.round(item.score),
+  weight: item.weight,
+  evidence: item.evidence,
+  reason: item.reason || item.explanation || item.notes || item.evidence || "模型未提供该维度解释。",
+}));
+
+export const scoreCandidateOutputSchema = z.object({
+  fitScore: z.coerce.number().int().min(0).max(100).optional(),
+  evidenceLevel: evidenceLevelSchema.catch("E1"),
+  scoreBreakdown: z.array(scoreBreakdownItemSchema).min(3).max(6),
+  topReasons: stringArraySchema,
+  risks: stringArraySchema,
+  missingEvidence: stringArraySchema,
+  nextAction: z.string().default("人工复核证据后决定下一步。"),
+  humanReviewRequired: z.boolean().default(true),
+}).transform((score) => {
+  const usesFractionalWeights = score.scoreBreakdown.every((item) => item.weight <= 1);
+  const scoreBreakdown = score.scoreBreakdown.map((item) => ({
+    ...item,
+    weight: usesFractionalWeights ? Math.round(item.weight * 100) : item.weight,
+  }));
+  const totalWeight = scoreBreakdown.reduce((sum, item) => sum + item.weight, 0);
+  const weightedScore =
+    totalWeight > 0
+      ? scoreBreakdown.reduce((sum, item) => sum + item.score * item.weight, 0) / totalWeight
+      : scoreBreakdown.reduce((sum, item) => sum + item.score, 0) / scoreBreakdown.length;
+  const derivedRisks = scoreBreakdown
+    .filter((item) => item.score < 40 || /risk|compliance|合规|风险/i.test(`${item.dimension} ${item.reason} ${item.evidence}`))
+    .map((item) => `${item.dimension}: ${item.reason}`);
+  return {
+    ...score,
+    scoreBreakdown,
+    fitScore: score.fitScore ?? Math.round(weightedScore),
+    topReasons: score.topReasons.length
+      ? score.topReasons
+      : scoreBreakdown
+          .slice()
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 3)
+          .map((item) => `${item.dimension}: ${item.reason}`),
+    risks: score.risks.length ? score.risks : derivedRisks,
+    missingEvidence: score.missingEvidence.length
+      ? score.missingEvidence
+      : scoreBreakdown
+          .filter((item) => item.evidence.includes("未") || item.score < 60)
+          .map((item) => `${item.dimension}: ${item.evidence}`),
+  };
+});
+
+export type ScoreCandidateOutput = z.infer<typeof scoreCandidateOutputSchema>;
+
+const marketingChannelInputSchema = z
+  .string()
+  .transform((channel) => {
+    const normalized = channel.trim().toLowerCase().replace(/\s+/g, "_");
+    const aliases: Record<string, (typeof MARKETING_CHANNELS)[number]> = {
+      "小红书": "xiaohongshu",
+      rednote: "xiaohongshu",
+      weixin: "wechat",
+      "微信公众号": "wechat",
+      "公众号": "wechat",
+      zhihu: "zhihu",
+      "知乎": "zhihu",
+      linkedin: "linkedin",
+      community: "community",
+      "社群": "community",
+      newsletter: "email_newsletter",
+      email: "email_newsletter",
+    };
+    return aliases[normalized] ?? normalized;
+  })
+  .pipe(marketingChannelSchema.catch("community"));
+
+const marketingPostSchema = z
+  .record(z.string(), z.unknown())
+  .transform((post) => {
+    const nestedPost = typeof post.post === "object" && post.post !== null ? (post.post as Record<string, unknown>) : {};
+    const content = typeof post.content === "object" && post.content !== null ? (post.content as Record<string, unknown>) : {};
+    return { ...post, ...nestedPost, ...content };
+  })
+  .pipe(
+    z.object({
+      channel: marketingChannelInputSchema.default("community"),
+      title: z.string().optional(),
+      headline: z.string().optional(),
+      subject: z.string().optional(),
+      body: z.string().optional(),
+      content: z.string().optional(),
+      copy: z.string().optional(),
+      text: z.string().optional(),
+      cta: z.string().optional(),
+      callToAction: z.string().optional(),
+      hashtags: stringArraySchema,
+      riskNotes: stringArraySchema,
+      reviewNotes: stringArraySchema,
+    }),
+  )
+  .transform((post) => ({
+    channel: post.channel,
+    title: post.title || post.headline || post.subject || "专家项目招募",
+    body: cleanMarketingBody(
+      post.body || post.content || post.copy || post.text || "我们正在招募符合项目需求的专家参与标注/评审任务，欢迎回复或推荐合适人选。",
+    ),
+    cta: post.cta || post.callToAction || "如有相关经验，欢迎回复或推荐合适专家。",
+    hashtags: post.hashtags,
+    riskNotes: post.riskNotes.length ? post.riskNotes : post.reviewNotes,
+  }));
+
+function cleanMarketingBody(body: string) {
+  return body
+    .replace(/\n+\s*(CTA|Call to action|riskNotes?|Review notes?)\s*[:：][\s\S]*$/i, "")
+    .trim();
+}
+
+function collectMarketingPosts(output: Record<string, unknown>): unknown[] {
+  const direct =
+    output.posts ??
+    output.channelPosts ??
+    output.channel_posts ??
+    output.drafts ??
+    output.marketingPosts ??
+    output.marketing_posts ??
+    output.socialPosts ??
+    output.social_posts ??
+    output.channels;
+  if (Array.isArray(direct)) {
+    return direct
+      .map((item) =>
+        item && typeof item === "object"
+          ? { ...(output.channel ? { channel: output.channel } : {}), ...(item as Record<string, unknown>) }
+          : item,
+      )
+      .slice(0, MARKETING_CHANNELS.length);
+  }
+  if (direct && typeof direct === "object") {
+    return Object.entries(direct as Record<string, unknown>).map(([channel, value]) =>
+      value && typeof value === "object" ? { channel, ...(value as Record<string, unknown>) } : { channel, body: String(value ?? "") },
+    ).slice(0, MARKETING_CHANNELS.length);
+  }
+
+  const nestedKeys = ["campaign", "marketingPlan", "marketing_plan", "contentPlan", "content_plan", "plan", "result", "data"];
+  for (const key of nestedKeys) {
+    const nested = output[key];
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      const posts = collectMarketingPosts(nested as Record<string, unknown>);
+      if (posts.length) return posts;
+    }
+  }
+
+  if (typeof output.channel === "string") return [output].slice(0, MARKETING_CHANNELS.length);
+
+  const channelKeyedPosts = Object.entries(output)
+    .filter(([key, value]) => marketingChannelInputSchema.safeParse(key).success && value && typeof value === "object")
+    .map(([channel, value]) => ({ channel, ...(value as Record<string, unknown>) }));
+  if (channelKeyedPosts.length) return channelKeyedPosts.slice(0, MARKETING_CHANNELS.length);
+
+  return [];
+}
+
+function readStringArray(output: Record<string, unknown>, keys: string[]): unknown[] {
+  for (const key of keys) {
+    const value = output[key];
+    if (Array.isArray(value)) return value;
+    if (typeof value === "string") return [value];
+  }
+  for (const key of ["campaign", "marketingPlan", "marketing_plan", "contentPlan", "content_plan", "plan", "result", "data"]) {
+    const nested = output[key];
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      const nestedValue = readStringArray(nested as Record<string, unknown>, keys);
+      if (nestedValue.length) return nestedValue;
+    }
+  }
+  return [];
+}
+
+function readString(output: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = output[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  for (const key of ["campaign", "marketingPlan", "marketing_plan", "contentPlan", "content_plan", "plan", "result", "data"]) {
+    const nested = output[key];
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      const nestedValue = readString(nested as Record<string, unknown>, keys);
+      if (nestedValue) return nestedValue;
+    }
+  }
+  return "";
+}
+
+export const marketingCampaignOutputSchema = z
+  .record(z.string(), z.unknown())
+  .transform((output, ctx) => {
+    const rawPosts = collectMarketingPosts(output);
+    const posts: Array<z.infer<typeof marketingPostSchema>> = [];
+    for (const post of rawPosts) {
+      const parsedPost = marketingPostSchema.safeParse(post);
+      if (parsedPost.success) posts.push(parsedPost.data);
+    }
+
+    if (!posts.length) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Marketing campaign output did not contain any channel posts.",
+        path: ["posts"],
+      });
+      return z.NEVER;
+    }
+
+    const audienceRaw = readStringArray(output, ["audience", "targetAudience", "target_audience"]);
+    const reviewRaw = readStringArray(output, ["reviewChecklist", "review_checklist", "complianceChecklist", "compliance_checklist"]);
+
+    const audience = audienceRaw.map((item) => String(item).trim()).filter(Boolean);
+    const reviewChecklist = reviewRaw.map((item) => String(item).trim()).filter(Boolean);
+
+    return {
+      campaignSummary:
+        readString(output, ["campaignSummary", "campaign_summary", "summary", "campaignGoal", "campaign_goal", "objective"]) ||
+        "为项目需求生成多渠道专家招募文案。",
+      audience,
+      posts,
+      reviewChecklist: reviewChecklist.length
+        ? reviewChecklist
+        : ["确认项目需求可公开发布。", "移除敏感客户、预算和未授权数据。", "发布前由运营人工审批。"],
+    };
+  });
+
+export type MarketingCampaignOutput = z.infer<typeof marketingCampaignOutputSchema>;
+
+const defaultReplyTemplates = {
+  interested: "感谢回复。我们会补充项目范围、时间安排和试标说明，确认后再推进下一步。",
+  unavailable: "感谢告知。如您愿意，也欢迎推荐更合适的专家。",
+  referral: "感谢推荐。我们会仅基于公开信息和对方同意进行后续沟通。",
+  priceQuestion: "预算会根据任务复杂度、投入时间和试标结果确认，正式合作前会明确报价和结算方式。",
+  ndaQuestion: "正式接触任何敏感数据前会先签署 NDA，并优先使用脱敏样例进行试标。",
+  noInterest: "感谢回复。我们会停止本次触达，不再继续跟进该项目。",
+  unsubscribe: "已记录不再联系请求，后续不会再就此项目触达。",
+  deletionRequest: "已记录删除请求，我们会按内部流程移除非必要联系记录。",
+};
+
+const replyTemplatesSchema = z
+  .object({
+    interested: z.string().optional(),
+    unavailable: z.string().optional(),
+    referral: z.string().optional(),
+    priceQuestion: z.string().optional(),
+    ndaQuestion: z.string().optional(),
+    noInterest: z.string().optional(),
+    unsubscribe: z.string().optional(),
+    deletionRequest: z.string().optional(),
+  })
+  .optional()
+  .transform((templates) => ({
+    ...defaultReplyTemplates,
+    ...Object.fromEntries(
+      Object.entries(templates ?? {}).filter(([, value]) => typeof value === "string" && value.trim().length > 0),
+    ),
+  }));
+
+export const outreachOutputSchema = z
+  .object({
+    subject: z.string().optional(),
+    body: z.string().optional(),
+    draft: z.string().optional(),
+    email: z
+      .object({
+        subject: z.string().optional(),
+        body: z.string().optional(),
+      })
+      .optional(),
+    replyTemplates: replyTemplatesSchema,
+  })
+  .transform((output) => ({
+    subject: output.subject || output.email?.subject || "专家项目合作邀请",
+    body: output.body || output.email?.body || output.draft || "您好，我们希望邀请您了解一个专家标注/评审项目。正式推进前会补充任务范围、试标说明和合规安排。",
+    replyTemplates: output.replyTemplates,
+  }));
+
+const defaultTrialCriteria = [
+  {
+    name: "领域判断准确性",
+    weight: 35,
+    description: "能否基于脱敏样例指出核心问题、边界条件和判断依据。",
+  },
+  {
+    name: "证据化评审",
+    weight: 30,
+    description: "是否给出可复核的理由，而不是只给结论。",
+  },
+  {
+    name: "沟通与合规",
+    weight: 20,
+    description: "是否避免不必要敏感信息，并能清楚说明不确定性。",
+  },
+  {
+    name: "交付稳定性",
+    weight: 15,
+    description: "是否按要求格式提交，结论完整、可追踪。",
+  },
+];
+
+const trialCriterionSchema = z
+  .object({
+    name: z.string().optional(),
+    criterion: z.string().optional(),
+    dimension: z.string().optional(),
+    weight: z.coerce.number().min(0).max(100).catch(0),
+    description: z.string().optional(),
+    rubric: z.string().optional(),
+    expectation: z.string().optional(),
+  })
+  .transform((criterion) => ({
+    name: criterion.name || criterion.criterion || criterion.dimension || "试标维度",
+    weight: criterion.weight,
+    description: criterion.description || criterion.rubric || criterion.expectation || "按项目要求人工复核该维度。",
+  }));
+
+const trialRubricSchema = z
+  .object({
+    criteria: z.array(trialCriterionSchema).optional(),
+    passThreshold: z.coerce.number().min(0).max(100).catch(75).optional(),
+    reviewNotes: stringArraySchema,
+  })
+  .optional()
+  .transform((rubric) => {
+    const criteria = rubric?.criteria?.length ? rubric.criteria : defaultTrialCriteria;
+    return {
+      criteria,
+      passThreshold: rubric?.passThreshold ?? 75,
+      reviewNotes: rubric?.reviewNotes.length
+        ? rubric.reviewNotes
+        : ["使用脱敏样例。", "试标结果仅用于人工复核，不自动决定录用。", "记录不确定性和缺失证据。"],
+    };
+  });
+
+const instructionSchema = z
+  .union([z.string(), z.array(z.union([z.string(), z.number(), z.boolean()]))])
+  .optional()
+  .transform((value) => {
+    if (typeof value === "string") return value.trim();
+    if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean).join("\n");
+    return "";
+  });
+
+export const trialTaskOutputSchema = z
+  .record(z.string(), z.unknown())
+  .transform((output) => {
+    const nested =
+      (typeof output.trialTask === "object" && output.trialTask !== null ? output.trialTask : null) ??
+      (typeof output.task === "object" && output.task !== null ? output.task : null) ??
+      (typeof output.trial === "object" && output.trial !== null ? output.trial : null) ??
+      output;
+    return nested as Record<string, unknown>;
+  })
+  .pipe(
+    z
+      .object({
+        instructions: instructionSchema,
+        instruction: instructionSchema,
+        taskDescription: instructionSchema,
+        description: instructionSchema,
+        prompt: instructionSchema,
+        rubric: trialRubricSchema,
+      })
+      .transform((output) => ({
+        instructions:
+          output.instructions ||
+          output.instruction ||
+          output.taskDescription ||
+          output.description ||
+          output.prompt ||
+          "请候选专家基于一段脱敏样例完成小规模评审，指出主要问题、判断依据、风险、不确定性和建议处理方式。",
+        rubric: output.rubric,
+      })),
+  );
+
+export const trialResultSchema = z.object({
+  score: z.coerce.number().min(0).max(100),
+  outcome: z.enum(["passed", "failed", "needs_review"]),
+  notes: z.string().optional(),
+});
+
+export const qualityEventSchema = z.object({
+  eventType: z.enum([
+    "recalled",
+    "contacted",
+    "replied",
+    "declined",
+    "trial_started",
+    "trial_passed",
+    "trial_failed",
+    "onboarded",
+    "activated",
+    "unsubscribed",
+    "delete_requested",
+  ]),
+  projectId: z.string().optional(),
+  candidateId: z.string().optional(),
+  channel: z.string().trim().max(80).optional(),
+  score: z.coerce.number().min(0).max(100).optional(),
+  notes: z.string().trim().max(1200).optional().default(""),
+});
+
+export const supplyGapOutputSchema = z.object({
+  gaps: z
+    .array(
+      z.object({
+        gapType: z.string().default("capacity"),
+        description: z.string(),
+        requiredCount: z.coerce.number().int().min(0).default(0),
+        availableCount: z.coerce.number().int().min(0).default(0),
+        severity: z.enum(["low", "medium", "high", "critical"]).catch("medium"),
+        recommendedAction: z.string().default("补充外部搜索并人工复核候选。"),
+      }),
+    )
+    .default([]),
+  searchDirections: stringArraySchema,
+  summary: z.string().default("供给缺口已分析。"),
+});
+
+export const supplyRankOutputSchema = z.object({
+  candidates: z
+    .array(
+      z.object({
+        candidateId: z.string(),
+        conversionProbability: z.coerce.number().min(0).max(1).catch(0.5),
+        rankReasons: stringArraySchema,
+        risks: stringArraySchema,
+        nextAction: z.string().default("人工复核后决定下一步。"),
+      }),
+    )
+    .default([]),
+});
+
+export const recruitmentRetrospectiveOutputSchema = z.object({
+  summary: z.string().default("招募复盘已生成。"),
+  wins: stringArraySchema,
+  bottlenecks: stringArraySchema,
+  sourceInsights: stringArraySchema,
+  nextActions: stringArraySchema,
+});

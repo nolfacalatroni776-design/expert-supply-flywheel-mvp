@@ -1,0 +1,446 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id                String             @id @default(cuid())
+  title             String
+  rawDemand         String
+  domain            String?
+  taskType          String?
+  quantity          Int?
+  budgetMin         Float?
+  budgetMax         Float?
+  languagesJson     String             @default("[]")
+  regionsJson       String             @default("[]")
+  riskLevel         String             @default("medium")
+  status            String             @default("draft")
+  personaJson       String             @default("{}")
+  searchQueriesJson String             @default("[]")
+  supplyGoalJson      String           @default("{}")
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  candidates        ProjectCandidate[]
+  searchResults     SearchResult[]
+  evidenceItems     EvidenceItem[]
+  auditEvents       AuditEvent[]
+  marketingCampaigns MarketingCampaign[]
+  marketingPosts    MarketingPost[]
+  expertEngagementEvents ExpertEngagementEvent[]
+  expertQualityMetrics   ExpertQualityMetric[]
+  supplySearchRuns       SupplySearchRun[]
+  supplyGaps             SupplyGap[]
+  searchSourceMetrics    SearchSourceMetric[]
+  recruitmentOutcomes    RecruitmentOutcome[]
+  agentTaskRuns          AgentTaskRun[]
+}
+
+model Expert {
+  id              String             @id @default(cuid())
+  name            String
+  title           String?
+  affiliation     String?
+  domainTagsJson  String             @default("[]")
+  languagesJson   String             @default("[]")
+  region          String?
+  contactJson     String             @default("{}")
+  sourceUrl       String?
+  evidenceLevel   String             @default("E0")
+  consentState    String             @default("unknown")
+  riskFlagsJson   String             @default("[]")
+  expertType      String             @default("external")
+  lastActiveAt    DateTime?
+  qualitySummaryJson String          @default("{}")
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  candidates      ProjectCandidate[]
+  evidenceItems   EvidenceItem[]
+  signals         ExpertSignal[]
+  engagementEvents ExpertEngagementEvent[]
+  qualityMetrics  ExpertQualityMetric[]
+  primaryMergeCandidates ExpertMergeCandidate[] @relation("PrimaryExpert")
+  duplicateMergeCandidates ExpertMergeCandidate[] @relation("DuplicateExpert")
+
+  @@index([name])
+  @@index([expertType])
+  @@index([lastActiveAt])
+  @@unique([sourceUrl])
+}
+
+model ProjectCandidate {
+  id                String          @id @default(cuid())
+  projectId         String
+  expertId          String
+  stage             String          @default("sourced")
+  fitScore          Int?
+  scoringJson       String          @default("{}")
+  risksJson         String          @default("[]")
+  missingJson       String          @default("[]")
+  nextAction        String?
+  humanReviewNeeded Boolean         @default(true)
+  sourceType        String          @default("external")
+  sourceRunId       String?
+  conversionProbability Float?
+  rankReasonJson    String          @default("{}")
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  project           Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  expert            Expert          @relation(fields: [expertId], references: [id], onDelete: Cascade)
+  sourceRun         SupplySearchRun? @relation(fields: [sourceRunId], references: [id], onDelete: SetNull)
+  evidenceItems     EvidenceItem[]
+  outreachDrafts    OutreachDraft[]
+  trialTasks        TrialTask[]
+  engagementEvents  ExpertEngagementEvent[]
+
+  @@unique([projectId, expertId])
+  @@index([stage])
+  @@index([sourceType])
+  @@index([sourceRunId])
+}
+
+model SearchResult {
+  id        String   @id @default(cuid())
+  projectId String
+  searchRunId String?
+  query     String
+  title     String
+  url       String
+  snippet   String
+  domain    String?
+  position  Int?
+  sourceType String @default("public_web")
+  createdAt DateTime @default(now())
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  searchRun SupplySearchRun? @relation(fields: [searchRunId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([searchRunId])
+  @@index([url])
+  @@unique([projectId, url])
+}
+
+model SearchCache {
+  id          String   @id @default(cuid())
+  query       String   @unique
+  provider    String
+  resultsJson String
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([expiresAt])
+}
+
+model EvidenceItem {
+  id              String            @id @default(cuid())
+  projectId       String?
+  expertId        String
+  candidateId     String?
+  claim           String
+  sourceUrl       String
+  sourceTitle     String?
+  sourceType      String            @default("public_web")
+  snippet         String
+  evidenceLevel   String            @default("E1")
+  confidence      Float             @default(0.5)
+  createdAt       DateTime          @default(now())
+  project         Project?          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  expert          Expert            @relation(fields: [expertId], references: [id], onDelete: Cascade)
+  candidate       ProjectCandidate? @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([expertId])
+  @@index([candidateId])
+  @@index([evidenceLevel])
+}
+
+model OutreachDraft {
+  id          String           @id @default(cuid())
+  candidateId String
+  channel     String           @default("email")
+  subject     String
+  body        String
+  replyTemplatesJson String   @default("{}")
+  status      String           @default("draft")
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  candidate   ProjectCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId])
+  @@index([status])
+}
+
+model TrialTask {
+  id            String           @id @default(cuid())
+  candidateId   String
+  instructions  String
+  rubricJson    String           @default("{}")
+  score         Float?
+  outcome       String?
+  notes         String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  candidate     ProjectCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId])
+  @@index([outcome])
+}
+
+model ExpertSignal {
+  id            String   @id @default(cuid())
+  expertId      String
+  type          String
+  value         String
+  source        String
+  evidenceLevel String  @default("E1")
+  confidence    Float   @default(0.5)
+  sourceUrl     String?
+  createdAt     DateTime @default(now())
+  expert        Expert   @relation(fields: [expertId], references: [id], onDelete: Cascade)
+
+  @@index([expertId])
+  @@index([type])
+  @@index([evidenceLevel])
+}
+
+model ExpertEngagementEvent {
+  id          String   @id @default(cuid())
+  expertId    String
+  projectId   String?
+  candidateId String?
+  eventType   String
+  channel     String?
+  payloadJson String   @default("{}")
+  createdAt   DateTime @default(now())
+  expert      Expert   @relation(fields: [expertId], references: [id], onDelete: Cascade)
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  candidate   ProjectCandidate? @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+
+  @@index([expertId])
+  @@index([projectId])
+  @@index([candidateId])
+  @@index([eventType])
+}
+
+model ExpertQualityMetric {
+  id         String   @id @default(cuid())
+  expertId   String
+  projectId  String?
+  metricType String
+  score      Float
+  source     String
+  notes      String?
+  createdAt  DateTime @default(now())
+  expert     Expert   @relation(fields: [expertId], references: [id], onDelete: Cascade)
+  project    Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([expertId])
+  @@index([projectId])
+  @@index([metricType])
+}
+
+model SupplySearchRun {
+  id          String   @id @default(cuid())
+  projectId   String
+  runType     String
+  status      String   @default("completed")
+  goalJson    String   @default("{}")
+  queriesJson String   @default("[]")
+  summaryJson String   @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  candidates  ProjectCandidate[]
+  searchResults SearchResult[]
+  sourceMetrics SearchSourceMetric[]
+
+  @@index([projectId])
+  @@index([runType])
+  @@index([status])
+}
+
+model SupplyGap {
+  id               String   @id @default(cuid())
+  projectId         String
+  gapType           String
+  description       String
+  requiredCount     Int
+  availableCount    Int
+  severity          String
+  recommendedAction String
+  status            String   @default("open")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  project           Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([severity])
+  @@index([status])
+}
+
+model SearchSourceMetric {
+  id             String   @id @default(cuid())
+  projectId       String
+  searchRunId     String?
+  query           String
+  domain          String?
+  resultCount     Int     @default(0)
+  candidateCount  Int     @default(0)
+  e2PlusCount     Int     @default(0)
+  approvedCount   Int     @default(0)
+  trialCount      Int     @default(0)
+  onboardedCount  Int     @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  searchRun       SupplySearchRun? @relation(fields: [searchRunId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([searchRunId])
+  @@index([domain])
+}
+
+model ExpertMergeCandidate {
+  id                String   @id @default(cuid())
+  primaryExpertId   String
+  duplicateExpertId String
+  reasonJson        String   @default("{}")
+  confidence        Float    @default(0.5)
+  status            String   @default("pending")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  primaryExpert     Expert   @relation("PrimaryExpert", fields: [primaryExpertId], references: [id], onDelete: Cascade)
+  duplicateExpert   Expert   @relation("DuplicateExpert", fields: [duplicateExpertId], references: [id], onDelete: Cascade)
+
+  @@unique([primaryExpertId, duplicateExpertId])
+  @@index([status])
+}
+
+model RecruitmentOutcome {
+  id             String   @id @default(cuid())
+  projectId       String
+  targetCount     Int     @default(0)
+  sourcedCount    Int     @default(0)
+  approvedCount   Int     @default(0)
+  contactedCount  Int     @default(0)
+  trialCount      Int     @default(0)
+  onboardedCount  Int     @default(0)
+  summaryJson     String  @default("{}")
+  createdAt       DateTime @default(now())
+  project         Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([createdAt])
+}
+
+model MarketingCampaign {
+  id            String          @id @default(cuid())
+  projectId     String
+  objective     String          @default("recruit_experts")
+  audienceJson  String          @default("[]")
+  channelsJson  String          @default("[]")
+  messageBrief  String
+  status        String          @default("draft")
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  project       Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  posts         MarketingPost[]
+
+  @@index([projectId])
+  @@index([status])
+}
+
+model MarketingPost {
+  id           String            @id @default(cuid())
+  campaignId   String
+  projectId    String
+  channel      String
+  title        String
+  body         String
+  cta          String
+  hashtagsJson String            @default("[]")
+  riskNotesJson String           @default("[]")
+  status       String            @default("draft")
+  scheduledFor DateTime?
+  publishedAt  DateTime?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  campaign     MarketingCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  project      Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([campaignId])
+  @@index([channel])
+  @@index([status])
+}
+
+model AuditEvent {
+  id         String   @id @default(cuid())
+  projectId  String?
+  entityType String
+  entityId   String
+  action     String
+  payloadJson String  @default("{}")
+  createdAt  DateTime @default(now())
+  project    Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([entityType, entityId])
+  @@index([action])
+}
+
+model AgentTaskRun {
+  id                  String          @id @default(cuid())
+  projectId           String
+  intent              String
+  instruction         String
+  status              String          @default("planned")
+  planJson            String          @default("{}")
+  contextSnapshotJson String          @default("{}")
+  reportJson          String          @default("{}")
+  errorMessage        String?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  startedAt           DateTime?
+  completedAt         DateTime?
+  project             Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  steps               AgentTaskStep[]
+
+  @@index([projectId])
+  @@index([intent])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model AgentTaskStep {
+  id                  String       @id @default(cuid())
+  runId               String
+  stepKey             String
+  label               String
+  status              String       @default("pending")
+  order               Int
+  requiresConfirmation Boolean     @default(false)
+  confirmedAt         DateTime?
+  inputJson           String       @default("{}")
+  outputJson          String       @default("{}")
+  checksJson          String       @default("{}")
+  errorMessage        String?
+  startedAt           DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  run                 AgentTaskRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, stepKey])
+  @@index([runId])
+  @@index([status])
+  @@index([stepKey])
+}
