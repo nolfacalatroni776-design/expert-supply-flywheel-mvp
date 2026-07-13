@@ -27,9 +27,11 @@ describe("navigation", () => {
   });
 
   it("keeps workspace navigation at object level", () => {
-    const items = getWorkspaceNavItems("project-1");
+    const items = getWorkspaceNavItems();
     expect(items.map((item) => item.id)).toEqual(["agent", "projects", "experts", "channels", "review", "analytics"]);
     expect(items.some((item) => ["demand", "supply", "pipeline", "growth"].includes(item.id))).toBe(false);
+    expect(items.map((item) => item.href)).toEqual(["/?view=agent", "/?view=projects", "/?view=experts", "/?view=channels", "/?view=review", "/?view=analytics"]);
+    expect(items.every((item) => !item.href.includes("project="))).toBe(true);
   });
 
   it("returns exactly four project steps", () => {

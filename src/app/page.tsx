@@ -236,7 +236,7 @@ export default async function Home({ searchParams }: PageProps) {
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5">
-            <SidebarNav selectedProjectId={selectedProject?.id} selectedView={selectedView} />
+            <SidebarNav selectedView={selectedView} />
 
             <div className="mt-5">
               <Link
@@ -346,8 +346,8 @@ export default async function Home({ searchParams }: PageProps) {
   );
 }
 
-function SidebarNav({ selectedProjectId, selectedView }: { selectedProjectId?: string; selectedView: CanonicalView }) {
-  const items = getWorkspaceNavItems(selectedProjectId);
+function SidebarNav({ selectedView }: { selectedView: CanonicalView }) {
+  const items = getWorkspaceNavItems();
 
   return (
     <nav className="grid gap-1 text-sm font-medium text-[#5f5a50]" data-sidebar-nav>
@@ -982,12 +982,12 @@ function LatestAgentRunCard({ project }: { project: ProjectWorkspaceData }) {
 
 function AgentDrawer({ project }: { project: ProjectWorkspaceData }) {
   return (
-    <details className="relative">
+    <details className="relative z-[80]">
       <summary className="inline-flex h-9 cursor-pointer list-none items-center justify-center gap-2 rounded-lg border border-[#dbe4ee] bg-white px-3 text-sm font-semibold text-[#28251e] transition hover:border-[#9db7d3] hover:bg-[#fbfdff] [&::-webkit-details-marker]:hidden">
         <MessageSquare className="size-4 text-[#2563eb]" />
         招募助手
       </summary>
-      <div className="fixed inset-x-4 top-24 z-30 max-h-[calc(100vh-7rem)] overflow-y-auto rounded-lg border border-[#dbe4ee] bg-white p-4 shadow-[0_18px_45px_rgba(17,17,17,0.12)] sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-[min(760px,calc(100vw-2rem))]">
+      <div className="fixed inset-x-4 top-24 z-[90] max-h-[calc(100vh-7rem)] overflow-y-auto rounded-lg border border-[#dbe4ee] bg-white p-4 shadow-[0_18px_45px_rgba(17,17,17,0.12)] sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-[min(760px,calc(100vw-2rem))]">
         <AgentCommandForm projectId={project.id} projectTitle={project.title} />
       </div>
     </details>

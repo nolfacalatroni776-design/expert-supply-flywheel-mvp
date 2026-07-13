@@ -65,15 +65,14 @@ export function isMarketingPostStatusFilter(value: unknown): value is MarketingP
   return value === "all" || value === "draft" || value === "needs_review" || value === "approved" || value === "scheduled" || value === "published" || value === "archived";
 }
 
-export function getWorkspaceNavItems(selectedProjectId?: string) {
-  const projectQuery = selectedProjectId ? `project=${selectedProjectId}&` : "";
+export function getWorkspaceNavItems() {
   return [
-    { id: "agent", label: "招募指挥台", icon: Sparkles, href: `/?${projectQuery}view=agent` },
+    { id: "agent", label: "招募指挥台", icon: Sparkles, href: "/?view=agent" },
     { id: "projects", label: "项目库", icon: Database, href: "/?view=projects" },
     { id: "experts", label: "专家库", icon: UserCheck, href: "/?view=experts" },
-    { id: "channels", label: "渠道中心", icon: Megaphone, href: `/?${projectQuery}view=channels` },
-    { id: "review", label: "复核中心", icon: ShieldCheck, href: `/?${projectQuery}view=review` },
-    { id: "analytics", label: "数据复盘", icon: BarChart3, href: `/?${projectQuery}view=analytics` },
+    { id: "channels", label: "渠道中心", icon: Megaphone, href: "/?view=channels" },
+    { id: "review", label: "复核中心", icon: ShieldCheck, href: "/?view=review" },
+    { id: "analytics", label: "数据复盘", icon: BarChart3, href: "/?view=analytics" },
   ] satisfies Array<{ id: CanonicalView; label: string; icon: LucideIcon; href: string }>;
 }
 
