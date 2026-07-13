@@ -1,46 +1,20 @@
+import { createAgentTaskRun } from "@/lib/agent-runtime";
 import { apiError, apiOk, handleRouteError } from "@/lib/http";
-import { parseJson } from "@/lib/json";
-import { prisma } from "@/lib/prisma";
-import { serializeSearchResult } from "@/lib/serializers";
-import { writeAuditEvent } from "@/lib/audit";
-import { sourceProjectCandidates } from "@/lib/sourcing";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
     const body = (await request.json().catch(() => ({}))) as { queries?: string[] };
-    const project = await prisma.project.findUnique({ where: { id } });
-    if (!project) return apiError("Project not found.", 404);
-
-    const projectQueries = parseJson<string[]>(project.searchQueriesJson, []);
-    const queries = (body.queries?.length ? body.queries : projectQueries).slice(0, 4);
-    if (!queries.length) {
-      return apiError("No search queries found. Run project analysis first or provide queries.", 422);
-    }
-
-    const sourcing = await sourceProjectCandidates({ project, queries });
-    if (!sourcing.ok) return apiError(sourcing.error, sourcing.status);
-
-    await writeAuditEvent({
-      projectId: project.id,
-      entityType: "project",
-      entityId: project.id,
-      action: "search.completed",
-      payload: {
-        queries: sourcing.queries,
-        searchResults: sourcing.searchResults.length,
-        candidates: sourcing.candidates.length,
-        providerStats: sourcing.providerStats,
-        cacheHits: sourcing.cacheHits.length,
-      },
+    const suppliedQueries = body.queries?.filter(Boolean).slice(0, 4) ?? [];
+    const run = await createAgentTaskRun({
+      projectId: id,
+      intent: "search_candidates",
+      instruction: suppliedQueries.length
+        ? `按已确认的搜索方向发现候选：${suppliedQueries.join("；")}。调用外部搜索服务前等待确认。`
+        : "按项目搜索式发现候选，并在调用外部搜索服务前等待确认。",
     });
-
-    return apiOk({
-      searchResults: sourcing.searchResults.map(serializeSearchResult),
-      candidates: sourcing.candidates,
-      providerStats: sourcing.providerStats,
-      cacheHits: sourcing.cacheHits,
-    });
+    if (!run) return apiError("Project not found.", 404);
+    return apiOk({ run }, 202);
   } catch (error) {
     return handleRouteError(error);
   }

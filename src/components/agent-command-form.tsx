@@ -5,11 +5,11 @@ import { AlertTriangle, CheckCircle2, Circle, Clock3, Loader2, Play, RotateCw, S
 import clsx from "clsx";
 
 const intents = [
-  { id: "full_sourcing", label: "完整发现候选", helper: "画像、内部召回、缺口和排序" },
   { id: "internal_match", label: "召回内部专家", helper: "优先复用专家库" },
   { id: "analyze_supply_gap", label: "分析供给缺口", helper: "判断缺什么、缺多少" },
   { id: "external_research", label: "补充公开候选", helper: "确认后查找公开来源" },
   { id: "rank_supply", label: "更新候选排序", helper: "整理候选优先级" },
+  { id: "full_sourcing", label: "完整发现候选", helper: "内部召回、缺口、公开补充" },
   { id: "recruitment_retrospective", label: "生成项目复盘", helper: "沉淀来源和下一步" },
   { id: "analyze_project", label: "补齐需求画像", helper: "完善要求和搜索方向" },
   { id: "search_candidates", label: "搜索候选", helper: "按搜索式发现专家" },
@@ -64,7 +64,7 @@ type AgentRunResponse = {
 };
 
 export function AgentCommandForm({ projectId, projectTitle }: AgentCommandFormProps) {
-  const [intent, setIntent] = useState<IntentId>("full_sourcing");
+  const [intent, setIntent] = useState<IntentId>("internal_match");
   const [instruction, setInstruction] = useState(
     `请推进「${projectTitle}」的专家招募，优先保证证据可信、合规复核和后续可触达性。`,
   );
@@ -186,7 +186,7 @@ export function AgentCommandForm({ projectId, projectTitle }: AgentCommandFormPr
                   className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-[#2563eb] px-3 text-sm font-semibold text-white transition hover:bg-[#1d4ed8] disabled:opacity-50"
                 >
                   {isPending ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-                  确认并继续
+                  {confirmationButtonLabel(run)}
                 </button>
               ) : null}
               {run.status === "planned" ? (
@@ -236,6 +236,12 @@ export function AgentCommandForm({ projectId, projectTitle }: AgentCommandFormPr
       ) : null}
     </div>
   );
+}
+
+function confirmationButtonLabel(run: AgentRun) {
+  return run.steps.some((step) => step.stepKey === "confirm_external_search" && step.status === "blocked")
+    ? "确认调用外部搜索"
+    : "确认并继续";
 }
 
 function StepRow({ step }: { step: AgentStep }) {

@@ -8,7 +8,7 @@ import {
   DraftStatusButton,
   TrialResultForm,
 } from "@/components/candidate-action-forms";
-import { CreateProjectForm } from "@/components/create-project-form";
+import { CreateProjectForm, QuickProjectStartForm } from "@/components/create-project-form";
 import { DynamicLogo } from "@/components/dynamic-logo";
 import { ExpertQualityEventForm } from "@/components/supply-action-forms";
 import { canApproveForOutreach } from "@/lib/gates";
@@ -1110,33 +1110,38 @@ function WorkspaceCommandCenter({
         </div>
 
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-          <Panel title="继续一个项目">
-            <div className="grid max-h-[520px] gap-2 overflow-y-auto pr-1">
-              {rankedProjects.map(({ project, reviewCount, activeCount, highEvidenceCount, internalCount }) => {
-                const action = getWorkspaceProjectAction(project, { reviewCount, activeCount, highEvidenceCount, internalCount });
-                return (
-                  <Link key={project.id} href={`/?project=${project.id}&view=agent`} className="grid gap-3 rounded-lg border border-[#edf0f2] bg-[#f8fafc] p-3 transition hover:border-[#9db7d3] hover:bg-white">
-                    <span className="flex flex-wrap items-center gap-2">
-                      <span className="font-semibold text-[#28251e]">{project.title}</span>
-                      <RiskBadge risk={project.riskLevel} />
-                      <Badge tone={action.tone}>{action.label}</Badge>
-                    </span>
-                    <span className="text-sm text-[#5f5a50]">
-                      {[project.domain, project.taskType, project.quantity ? `${project.quantity} 位专家` : null].filter(Boolean).join(" · ") || "需求待完善"}
-                    </span>
-                    <span className="grid grid-cols-4 gap-2">
-                      <Info label="内部" value={internalCount.toString()} />
-                      <Info label="高证据" value={highEvidenceCount.toString()} />
-                      <Info label="待复核" value={reviewCount.toString()} />
-                      <Info label="入池" value={activeCount.toString()} />
-                    </span>
-                    <span className="text-xs leading-5 text-[#7a7469]">下一步：{action.description}</span>
-                  </Link>
-                );
-              })}
-              {!rankedProjects.length ? <p className="rounded-lg border border-dashed border-[#d8d8d0] bg-[#f9f9f9] p-4 text-sm text-[#7a7469]">先创建一个招募项目。</p> : null}
-            </div>
-          </Panel>
+          <section className="grid gap-4">
+            <Panel title="描述需求开始">
+              <QuickProjectStartForm />
+            </Panel>
+            <Panel title="继续一个项目">
+              <div className="grid max-h-[360px] gap-2 overflow-y-auto pr-1">
+                {rankedProjects.map(({ project, reviewCount, activeCount, highEvidenceCount, internalCount }) => {
+                  const action = getWorkspaceProjectAction(project, { reviewCount, activeCount, highEvidenceCount, internalCount });
+                  return (
+                    <Link key={project.id} href={`/?project=${project.id}&view=agent`} className="grid gap-3 rounded-lg border border-[#edf0f2] bg-[#f8fafc] p-3 transition hover:border-[#9db7d3] hover:bg-white">
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold text-[#28251e]">{project.title}</span>
+                        <RiskBadge risk={project.riskLevel} />
+                        <Badge tone={action.tone}>{action.label}</Badge>
+                      </span>
+                      <span className="text-sm text-[#5f5a50]">
+                        {[project.domain, project.taskType, project.quantity ? `${project.quantity} 位专家` : null].filter(Boolean).join(" · ") || "需求待完善"}
+                      </span>
+                      <span className="grid grid-cols-4 gap-2">
+                        <Info label="内部" value={internalCount.toString()} />
+                        <Info label="高证据" value={highEvidenceCount.toString()} />
+                        <Info label="待复核" value={reviewCount.toString()} />
+                        <Info label="入池" value={activeCount.toString()} />
+                      </span>
+                      <span className="text-xs leading-5 text-[#7a7469]">下一步：{action.description}</span>
+                    </Link>
+                  );
+                })}
+                {!rankedProjects.length ? <p className="rounded-lg border border-dashed border-[#d8d8d0] bg-[#f9f9f9] p-4 text-sm text-[#7a7469]">先创建一个招募项目。</p> : null}
+              </div>
+            </Panel>
+          </section>
 
           <div className="grid content-start gap-4">
             <NewUserGuide
@@ -1149,10 +1154,10 @@ function WorkspaceCommandCenter({
               ]}
             />
             <Panel title="工作量概览">
-              <FunnelRow label="项目" value={stats.projects} tone="blue" />
-              <FunnelRow label="待复核" value={stats.review} tone="amber" />
-              <FunnelRow label="高证据候选" value={stats.highEvidence} tone="green" />
-              <FunnelRow label="可触达" value={stats.outreachReady} tone="blue" />
+              <FunnelRow label="项目" value={stats.projects} tone="blue" href="/?view=projects" />
+              <FunnelRow label="待复核" value={stats.review} tone="amber" href="/?view=review" />
+              <FunnelRow label="高证据候选" value={stats.highEvidence} tone="green" href="/?view=projects" />
+              <FunnelRow label="可触达" value={stats.outreachReady} tone="blue" href="/?view=projects" />
             </Panel>
           </div>
         </section>
@@ -1167,6 +1172,10 @@ function WorkspaceCommandCenter({
   const outreachReady = countOutreachReady(selectedProject);
   const activeCount = selectedProject.candidates.filter((candidate) => ["onboarded", "active"].includes(candidate.stage)).length;
   const recommended = getWorkspaceProjectAction(selectedProject, { reviewCount: projectReviewCount, activeCount, highEvidenceCount, internalCount });
+  const headerPrimaryAction =
+    projectReviewCount > 0
+      ? { href: `/?project=${selectedProject.id}&view=pipeline&candidateFilter=review`, label: "处理复核" }
+      : { href: "#agent-command", label: "生成执行计划" };
 
   return (
     <section className="grid gap-4">
@@ -1182,9 +1191,9 @@ function WorkspaceCommandCenter({
             </p>
           </div>
           <div className="flex flex-wrap gap-2 lg:justify-end">
-            <Link href={`/?project=${selectedProject.id}&view=pipeline&candidateFilter=review`} className="inline-flex h-9 items-center justify-center rounded-lg bg-[#28251e] px-3 text-sm font-semibold text-white transition hover:bg-black">
-              处理复核
-            </Link>
+            <a href={headerPrimaryAction.href} className="inline-flex h-9 items-center justify-center rounded-lg bg-[#28251e] px-3 text-sm font-semibold text-white transition hover:bg-black">
+              {headerPrimaryAction.label}
+            </a>
             <Link href={`/?project=${selectedProject.id}&view=demand`} className="inline-flex h-9 items-center justify-center rounded-lg border border-[#dbe4ee] bg-white px-3 text-sm font-semibold text-[#28251e] transition hover:border-[#9db7d3] hover:bg-[#fbfdff]">
               项目详情
             </Link>
@@ -1197,17 +1206,17 @@ function WorkspaceCommandCenter({
           <Panel title="当前项目">
             <div className="grid gap-2">
               <Info label="目标" value={selectedProject.quantity?.toString() ?? "-"} />
-              <Info label="内部召回" value={internalCount.toString()} />
-              <Info label="公开候选" value={externalCount.toString()} />
-              <Info label="高证据" value={highEvidenceCount.toString()} />
-              <Info label="待复核" value={projectReviewCount.toString()} />
-              <Info label="可触达" value={outreachReady.toString()} />
+              <Info label="内部召回" value={internalCount.toString()} href={`/?project=${selectedProject.id}&view=supply`} />
+              <Info label="公开候选" value={externalCount.toString()} href={`/?project=${selectedProject.id}&view=supply`} />
+              <Info label="高证据" value={highEvidenceCount.toString()} href={`/?project=${selectedProject.id}&view=pipeline&candidateFilter=highEvidence`} />
+              <Info label="待复核" value={projectReviewCount.toString()} href={`/?project=${selectedProject.id}&view=pipeline&candidateFilter=review`} />
+              <Info label="可触达" value={outreachReady.toString()} href={`/?project=${selectedProject.id}&view=pipeline&candidateFilter=outreachReady`} />
             </div>
           </Panel>
           <AgentFlowChecklist project={selectedProject} reviewCount={projectReviewCount} internalCount={internalCount} externalCount={externalCount} outreachReady={outreachReady} />
         </div>
 
-        <section className="order-1 rounded-lg border border-[#e7e7e2] bg-white p-4 shadow-[0_1px_2px_rgba(17,17,17,0.04)] xl:order-2">
+        <section id="agent-command" className="order-1 scroll-mt-4 rounded-lg border border-[#e7e7e2] bg-white p-4 shadow-[0_1px_2px_rgba(17,17,17,0.04)] xl:order-2">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-semibold text-[#28251e]">和招募助手推进</h2>
@@ -1224,9 +1233,15 @@ function WorkspaceCommandCenter({
           <AgentOutcomePanel project={selectedProject} />
           <Panel title="下一步">
             <div className="grid gap-2">
-              <Link href={`/?project=${selectedProject.id}&view=pipeline&candidateFilter=review`} className="rounded-lg border border-[#edf0f2] bg-[#f8fafc] px-3 py-2 text-sm font-semibold text-[#28251e] transition hover:border-[#9db7d3] hover:bg-white">
-                处理候选复核
-              </Link>
+              {projectReviewCount > 0 ? (
+                <Link href={`/?project=${selectedProject.id}&view=pipeline&candidateFilter=review`} className="rounded-lg border border-[#edf0f2] bg-[#f8fafc] px-3 py-2 text-sm font-semibold text-[#28251e] transition hover:border-[#9db7d3] hover:bg-white">
+                  处理候选复核
+                </Link>
+              ) : (
+                <a href="#agent-command" className="rounded-lg border border-[#edf0f2] bg-[#f8fafc] px-3 py-2 text-sm font-semibold text-[#28251e] transition hover:border-[#9db7d3] hover:bg-white">
+                  生成执行计划
+                </a>
+              )}
               <Link href={`/?project=${selectedProject.id}&view=supply`} className="rounded-lg border border-[#edf0f2] bg-[#f8fafc] px-3 py-2 text-sm font-semibold text-[#28251e] transition hover:border-[#9db7d3] hover:bg-white">
                 查看供给发现
               </Link>
@@ -1491,7 +1506,7 @@ function WorkspaceChannelsModule({
           <ChannelMetricLink href={workspaceMarketingFilterHref(selectedProject?.id ?? null, selectedChannel, "all")} label="内容" value={counts.all} active={selectedStatus === "all"} />
           <ChannelMetricLink href={workspaceMarketingFilterHref(selectedProject?.id ?? null, selectedChannel, "needs_review")} label="待复核" value={counts.needsReview} active={selectedStatus === "needs_review"} tone="amber" />
           <ChannelMetricLink href={workspaceMarketingFilterHref(selectedProject?.id ?? null, selectedChannel, "approved")} label="可发布" value={counts.approved} active={selectedStatus === "approved"} tone="blue" />
-          <ChannelMetricLink href={workspaceMarketingFilterHref(selectedProject?.id ?? null, selectedChannel, "published")} label="已确认" value={counts.published} active={selectedStatus === "published"} tone="green" />
+          <ChannelMetricLink href={workspaceMarketingFilterHref(selectedProject?.id ?? null, selectedChannel, "published")} label="已确认进展" value={counts.published} active={selectedStatus === "published"} tone="green" />
           <ChannelMetricLink href={workspaceMarketingFilterHref(selectedProject?.id ?? null, selectedChannel, "draft")} label="草稿" value={counts.draft} active={selectedStatus === "draft"} />
         </div>
 
@@ -1533,7 +1548,7 @@ function WorkspaceChannelsModule({
           <div className="grid grid-cols-3 gap-2">
             <MiniFilterLink href={workspaceMarketingFilterHref(selectedProject?.id ?? null, selectedChannel, "needs_review")} label="复核" value={counts.needsReview} active={selectedStatus === "needs_review"} />
             <MiniFilterLink href={workspaceMarketingFilterHref(selectedProject?.id ?? null, selectedChannel, "approved")} label="可发布" value={counts.approved} active={selectedStatus === "approved"} />
-            <MiniFilterLink href={workspaceMarketingFilterHref(selectedProject?.id ?? null, selectedChannel, "published")} label="已确认" value={counts.published} active={selectedStatus === "published"} />
+            <MiniFilterLink href={workspaceMarketingFilterHref(selectedProject?.id ?? null, selectedChannel, "published")} label="已确认进展" value={counts.published} active={selectedStatus === "published"} />
           </div>
           <div className="grid max-h-[560px] gap-2 overflow-y-auto pr-1">
             {visiblePosts.map((post) => (
@@ -1622,7 +1637,7 @@ function FollowUpSuggestions({
           <ApiButton label={`触达 ${topCandidate.expert.name}`} endpoint={`/api/project-candidates/${topCandidate.id}/outreach`} icon="outreach" />
         ) : null}
         {trialCandidate ? (
-          <ApiButton label={`试标 ${trialCandidate.expert.name}`} endpoint={`/api/project-candidates/${trialCandidate.id}/trial`} icon="trial" />
+          <ApiButton label={`设计试标 ${trialCandidate.expert.name}`} endpoint={`/api/project-candidates/${trialCandidate.id}/trial`} icon="trial" />
         ) : null}
       </div>
     </section>
@@ -1944,7 +1959,7 @@ function MarketingModule({
           <ChannelMetricLink href={marketingFilterHref(project.id, selectedChannel, "all")} label="内容" value={counts.all} active={selectedStatus === "all"} />
           <ChannelMetricLink href={marketingFilterHref(project.id, selectedChannel, "needs_review")} label="待复核" value={counts.needsReview} active={selectedStatus === "needs_review"} tone="amber" />
           <ChannelMetricLink href={marketingFilterHref(project.id, selectedChannel, "approved")} label="可发布" value={counts.approved} active={selectedStatus === "approved"} tone="blue" />
-          <ChannelMetricLink href={marketingFilterHref(project.id, selectedChannel, "published")} label="已确认" value={counts.published} active={selectedStatus === "published"} tone="green" />
+          <ChannelMetricLink href={marketingFilterHref(project.id, selectedChannel, "published")} label="已确认进展" value={counts.published} active={selectedStatus === "published"} tone="green" />
           <ChannelMetricLink href={marketingFilterHref(project.id, selectedChannel, "draft")} label="草稿" value={counts.draft} active={selectedStatus === "draft"} />
         </div>
         <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
@@ -1974,7 +1989,7 @@ function MarketingModule({
           <div className="grid grid-cols-3 gap-2">
             <MiniFilterLink href={marketingFilterHref(project.id, selectedChannel, "needs_review")} label="复核" value={counts.needsReview} active={selectedStatus === "needs_review"} />
             <MiniFilterLink href={marketingFilterHref(project.id, selectedChannel, "approved")} label="可发布" value={counts.approved} active={selectedStatus === "approved"} />
-            <MiniFilterLink href={marketingFilterHref(project.id, selectedChannel, "published")} label="已确认" value={counts.published} active={selectedStatus === "published"} />
+            <MiniFilterLink href={marketingFilterHref(project.id, selectedChannel, "published")} label="已确认进展" value={counts.published} active={selectedStatus === "published"} />
           </div>
           <div className="grid max-h-[520px] gap-2 overflow-y-auto pr-1">
             {visiblePosts.map((post) => (
@@ -1997,8 +2012,14 @@ function MarketingModule({
 }
 
 function ExpertLibraryModule({ experts, selectedProjectId }: { experts: ExpertLibraryData[]; selectedProjectId: string | null }) {
-  const internalExperts = experts.filter((expert) => expert.expertType === "internal");
-  const activeExperts = experts.filter((expert) => expert.lastActiveAt || expert.qualityMetrics.length > 0);
+  const sortedExperts = [...experts].sort(compareExpertAssets);
+  const badConsentStates = ["do_not_contact", "delete_requested", "unsubscribed"];
+  const internalExperts = experts.filter((expert) => expert.expertType === "internal" && !badConsentStates.includes(expert.consentState));
+  const historicalExperts = experts.filter((expert) =>
+    expert.qualityMetrics.length > 0 || expert.candidates.some((candidate) => ["trial", "onboarded", "active"].includes(candidate.stage)),
+  );
+  const externalPendingExperts = experts.filter((expert) => expert.expertType === "external" && evidenceRankForUi(expert.evidenceLevel) < 2);
+  const compliantReachableExperts = experts.filter((expert) => !badConsentStates.includes(expert.consentState) && evidenceRankForUi(expert.evidenceLevel) >= 2);
   return (
     <>
       <section className="rounded-lg border border-[#e7e7e2] bg-white p-5 shadow-[0_1px_2px_rgba(17,17,17,0.04)]">
@@ -2031,10 +2052,10 @@ function ExpertLibraryModule({ experts, selectedProjectId }: { experts: ExpertLi
           )}
         </div>
         <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
-          <Info label="专家总数" value={experts.length.toString()} />
-          <Info label="内部专家" value={internalExperts.length.toString()} />
-          <Info label="有质量记录" value={activeExperts.length.toString()} />
-          <Info label="可触达" value={experts.filter((expert) => !["do_not_contact", "delete_requested", "unsubscribed"].includes(expert.consentState)).length.toString()} />
+          <Info label="内部可激活" value={internalExperts.length.toString()} />
+          <Info label="历史通过" value={historicalExperts.length.toString()} />
+          <Info label="外部待核验" value={externalPendingExperts.length.toString()} />
+          <Info label="合规可触达" value={compliantReachableExperts.length.toString()} />
         </div>
       </section>
 
@@ -2053,15 +2074,16 @@ function ExpertLibraryModule({ experts, selectedProjectId }: { experts: ExpertLi
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f0eee8]">
-                {experts.map((expert) => {
+                {sortedExperts.map((expert) => {
                   const quality = parseJson<{ averageScore?: number }>(expert.qualitySummaryJson, {});
+                  const typeLabel = expert.expertType === "external" && evidenceRankForUi(expert.evidenceLevel) < 2 ? "外部待核验" : formatExpertType(expert.expertType);
                   return (
                     <tr key={expert.id} className="hover:bg-[#f9f9f9]">
                       <td className="px-3 py-3">
                         <p className="font-medium text-[#28251e]">{expert.name}</p>
                         <p className="max-w-[260px] truncate text-xs text-[#7a7469]">{[expert.title, expert.affiliation].filter(Boolean).join(" · ") || "-"}</p>
                       </td>
-                      <td className="px-3 py-3"><Badge tone={expert.expertType === "internal" ? "blue" : expert.expertType === "referred" ? "indigo" : "zinc"}>{formatExpertType(expert.expertType)}</Badge></td>
+                      <td className="px-3 py-3"><Badge tone={expert.expertType === "internal" ? "blue" : expert.expertType === "referred" ? "indigo" : "zinc"}>{typeLabel}</Badge></td>
                       <td className="px-3 py-3"><EvidenceBadge level={expert.evidenceLevel} /></td>
                       <td className="px-3 py-3">{typeof quality.averageScore === "number" && quality.averageScore > 0 ? Math.round(quality.averageScore) : "-"}</td>
                       <td className="px-3 py-3">{expert.lastActiveAt ? expert.lastActiveAt.toLocaleDateString("zh-CN") : "-"}</td>
@@ -2078,7 +2100,7 @@ function ExpertLibraryModule({ experts, selectedProjectId }: { experts: ExpertLi
         </Panel>
         <Panel title="专家 360">
           <div className="grid max-h-[620px] gap-3 overflow-y-auto pr-1">
-            {experts.slice(0, 8).map((expert) => (
+            {sortedExperts.slice(0, 8).map((expert) => (
               <div key={expert.id} className="rounded-lg border border-[#f0eee8] bg-[#f9f9f9] p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -2230,7 +2252,7 @@ function formatPostStatusFilter(status: MarketingPostStatusFilter) {
     needs_review: "待复核",
     approved: "可发布",
     scheduled: "待发布",
-    published: "已确认",
+    published: "已确认进展",
     archived: "已归档",
   };
   return labels[status];
@@ -2594,11 +2616,23 @@ function AgentTimeline({ events }: { events: ProjectWorkspaceData["auditEvents"]
 }
 
 
-function FunnelRow({ label, value, tone }: { label: string; value: number; tone: "blue" | "amber" | "green" | "indigo" }) {
-  return (
-    <div className="flex items-center justify-between border-b border-[#f0eee8] py-3 last:border-b-0">
+function FunnelRow({ label, value, tone, href }: { label: string; value: number; tone: "blue" | "amber" | "green" | "indigo"; href?: string }) {
+  const content = (
+    <>
       <span className="text-sm text-[#5f5a50]">{label}</span>
       <Badge tone={tone}>{value}</Badge>
+    </>
+  );
+  if (href) {
+    return (
+      <Link href={href} className="flex items-center justify-between border-b border-[#f0eee8] py-3 transition hover:bg-[#f8fafc] last:border-b-0" aria-label={`${label}：${value}，查看详情`}>
+        {content}
+      </Link>
+    );
+  }
+  return (
+    <div className="flex items-center justify-between border-b border-[#f0eee8] py-3 last:border-b-0">
+      {content}
     </div>
   );
 }
@@ -2879,7 +2913,7 @@ function CandidateRowAction({
   if (candidate.stage === "contacted" || candidate.stage === "replied" || candidate.stage === "screening") {
     return (
       <ApiButton
-        label="开始试标"
+        label="设计试标任务"
         endpoint={`/api/project-candidates/${candidate.id}/trial`}
         icon="trial"
         disabled={!canTransitionCandidateStage(candidate.stage, "trial").ok}
@@ -3322,11 +3356,23 @@ function NewUserGuide({ title, steps }: { title: string; steps: string[] }) {
   );
 }
 
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-[#f0eee8] bg-[#f9f9f9] px-3 py-2">
+function Info({ label, value, href }: { label: string; value: string; href?: string }) {
+  const content = (
+    <>
       <p className="text-[11px] font-medium uppercase text-[#9a9388]">{label}</p>
       <p className="mt-1 truncate text-sm font-medium text-[#28251e]" title={value}>{value}</p>
+    </>
+  );
+  if (href) {
+    return (
+      <Link href={href} className="block rounded-lg border border-[#f0eee8] bg-[#f9f9f9] px-3 py-2 transition hover:border-[#9db7d3] hover:bg-white" aria-label={`${label}：${value}，查看详情`}>
+        {content}
+      </Link>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-[#f0eee8] bg-[#f9f9f9] px-3 py-2">
+      {content}
     </div>
   );
 }
@@ -3415,7 +3461,7 @@ function formatMarketingStatusCompact(status: string) {
     needs_review: "待复核",
     approved: "已审批",
     scheduled: "待发布",
-    published: "已确认",
+    published: "已确认进展",
     archived: "已归档",
   };
   return labels[status] ?? status;
@@ -3453,10 +3499,33 @@ function formatSourceType(sourceType: string) {
 function formatExpertType(expertType: string) {
   const labels: Record<string, string> = {
     internal: "内部专家",
-    external: "外部专家",
+    external: "外部候选",
     referred: "推荐专家",
   };
   return labels[expertType] ?? "专家";
+}
+
+function compareExpertAssets(a: ExpertLibraryData, b: ExpertLibraryData) {
+  return (
+    expertAssetPriority(a) - expertAssetPriority(b) ||
+    expertQualityScore(b) - expertQualityScore(a) ||
+    evidenceRankForUi(b.evidenceLevel) - evidenceRankForUi(a.evidenceLevel) ||
+    (b.lastActiveAt?.getTime() ?? 0) - (a.lastActiveAt?.getTime() ?? 0) ||
+    b.candidates.length - a.candidates.length
+  );
+}
+
+function expertAssetPriority(expert: ExpertLibraryData) {
+  if (expert.expertType === "internal") return 0;
+  if (expert.expertType === "referred") return 1;
+  if (expert.qualityMetrics.length > 0 || expert.lastActiveAt || expert.candidates.some((candidate) => ["trial", "onboarded", "active"].includes(candidate.stage))) return 2;
+  if (evidenceRankForUi(expert.evidenceLevel) >= 2) return 3;
+  return 4;
+}
+
+function expertQualityScore(expert: ExpertLibraryData) {
+  const quality = parseJson<{ averageScore?: number }>(expert.qualitySummaryJson, {});
+  return typeof quality.averageScore === "number" ? quality.averageScore : 0;
 }
 
 function formatGapSeverity(severity: string) {

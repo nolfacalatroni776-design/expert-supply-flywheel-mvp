@@ -15,7 +15,7 @@ const marketingTransitions: Record<MarketingPostStatus, MarketingPostStatus[]> =
 const candidateTransitions: Record<PipelineStage, PipelineStage[]> = {
   sourced: ["enriched", "verified", "do_not_contact"],
   enriched: ["verified", "screening", "do_not_contact"],
-  verified: ["approved_for_outreach", "screening", "trial", "do_not_contact"],
+  verified: ["approved_for_outreach", "screening", "do_not_contact"],
   approved_for_outreach: ["contacted", "do_not_contact"],
   contacted: ["replied", "screening", "do_not_contact"],
   replied: ["screening", "trial", "do_not_contact"],

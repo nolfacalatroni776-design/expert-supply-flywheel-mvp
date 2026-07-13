@@ -22,5 +22,13 @@ describe("agent API boundaries", () => {
     expect(source).not.toContain("runExternalResearch");
     expect(source).not.toContain("sourceProjectCandidates");
   });
-});
 
+  it("keeps legacy candidate search API behind explicit agent confirmation", () => {
+    const source = readRoute("src/app/api/projects/[id]/search/route.ts");
+    expect(source).toContain("createAgentTaskRun");
+    expect(source).toContain('intent: "search_candidates"');
+    expect(source).not.toContain("sourceProjectCandidates");
+    expect(source).not.toContain("serializeSearchResult");
+    expect(source).not.toContain("writeAuditEvent");
+  });
+});

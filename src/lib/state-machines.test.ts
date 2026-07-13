@@ -27,6 +27,12 @@ describe("canTransitionCandidateStage", () => {
     expect(canTransitionCandidateStage("do_not_contact", "contacted").ok).toBe(false);
   });
 
+  it("requires candidate reply or screening before trial", () => {
+    expect(canTransitionCandidateStage("verified", "trial").ok).toBe(false);
+    expect(canTransitionCandidateStage("contacted", "trial").ok).toBe(false);
+    expect(canTransitionCandidateStage("replied", "trial")).toEqual({ ok: true });
+  });
+
   it("allows the normal screening to trial to onboarded path", () => {
     expect(canTransitionCandidateStage("screening", "trial")).toEqual({ ok: true });
     expect(canTransitionCandidateStage("trial", "onboarded")).toEqual({ ok: true });

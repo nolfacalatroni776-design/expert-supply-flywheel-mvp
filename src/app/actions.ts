@@ -52,3 +52,42 @@ export async function createProjectAction(formData: FormData) {
 
   redirect(`/?project=${project.id}&view=demand`);
 }
+
+export async function createProjectFromDemandAction(formData: FormData) {
+  const rawDemand = String(formData.get("rawDemand") ?? "").trim();
+  const explicitTitle = String(formData.get("title") ?? "").trim();
+  const title = explicitTitle.length >= 3 ? explicitTitle : makeProjectTitle(rawDemand);
+
+  const payload = createProjectSchema.parse({
+    title,
+    rawDemand,
+    languages: [],
+    regions: [],
+  });
+
+  const project = await prisma.project.create({
+    data: {
+      title: payload.title,
+      rawDemand: payload.rawDemand,
+      languagesJson: stringifyJson([]),
+      regionsJson: stringifyJson([]),
+    },
+  });
+
+  await writeAuditEvent({
+    projectId: project.id,
+    entityType: "project",
+    entityId: project.id,
+    action: "project.created",
+    payload: { source: "agent_home" },
+  });
+
+  redirect(`/?project=${project.id}&view=agent`);
+}
+
+function makeProjectTitle(rawDemand: string) {
+  const cleaned = rawDemand.replace(/\s+/g, " ").trim();
+  if (!cleaned) return "专家招募项目";
+  const short = cleaned.length > 22 ? `${cleaned.slice(0, 22)}...` : cleaned;
+  return short.includes("招募") ? short : `${short}专家招募`;
+}
