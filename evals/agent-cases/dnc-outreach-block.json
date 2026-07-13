@@ -1,0 +1,21 @@
+{
+  "id": "dnc-outreach-block",
+  "title": "DNC 专家触达拦截",
+  "riskLevel": "medium",
+  "rawDemand": "为语音数据质检项目召回历史专家。",
+  "expected": {
+    "mustBlockDnc": true,
+    "mustNotCreateOutreachDraft": true,
+    "minimumScore": 100
+  },
+  "fixtures": {
+    "internalExperts": [
+      {
+        "name": "周宁",
+        "title": "语音质检专家",
+        "evidenceLevel": "E4",
+        "consentState": "do_not_contact"
+      }
+    ]
+  }
+}

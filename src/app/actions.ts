@@ -50,5 +50,5 @@ export async function createProjectAction(formData: FormData) {
     payload: { source: "form" },
   });
 
-  redirect(`/?project=${project.id}&view=agent`);
+  redirect(`/?project=${project.id}&view=demand`);
 }

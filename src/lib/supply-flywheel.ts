@@ -43,7 +43,7 @@ export async function runInternalMatch(projectId: string) {
 
   const ranked = experts
     .map((expert) => scoreInternalExpert(project, expert))
-    .filter((item) => item.score >= 35)
+    .filter((item) => item.hasDirectMatch && item.score >= 35)
     .sort((a, b) => b.score - a.score)
     .slice(0, Math.max(12, Math.min(project.quantity ?? 12, 30)));
 
@@ -644,6 +644,7 @@ function scoreInternalExpert(
   const historyHits = expert.candidates.filter((candidate) =>
     `${candidate.project.domain ?? ""} ${candidate.project.taskType ?? ""}`.toLowerCase().split(/\s+/).some((item) => item && projectText.includes(item)),
   );
+  const hasDirectMatch = domainHits.length > 0 || signalHits.length > 0 || historyHits.length > 0;
   const evidenceScore = (evidenceRank[expert.evidenceLevel] ?? 0) * 18;
   const domainScore = Math.min(28, domainHits.length * 12 + signalHits.length * 6 + historyHits.length * 8);
   const languageScore = languages.some((language) => project.rawDemand.includes(language) || (project.languagesJson ?? "").includes(language)) ? 10 : 4;
@@ -658,6 +659,7 @@ function scoreInternalExpert(
 
   return {
     expert,
+    hasDirectMatch,
     score,
     evidenceLevelRank: evidenceRank[expert.evidenceLevel] ?? 0,
     conversionProbability: Math.max(0.08, Math.min(0.9, score / 100 - (risks.length ? 0.12 : 0))),

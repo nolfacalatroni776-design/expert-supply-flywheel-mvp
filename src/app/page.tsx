@@ -41,7 +41,6 @@ import {
   CopyCheck,
   Database,
   FileSearch,
-  Gauge,
   HomeIcon,
   Megaphone,
   Mail,
@@ -74,6 +73,7 @@ type ProjectWorkspaceData = Prisma.ProjectGetPayload<{
     supplyGaps: true;
     searchSourceMetrics: true;
     recruitmentOutcomes: true;
+    agentTaskRuns: { include: { steps: true } };
   };
 }>;
 
@@ -130,6 +130,11 @@ export default async function Home({ searchParams }: PageProps) {
             supplyGaps: { orderBy: { createdAt: "desc" }, take: 12 },
             searchSourceMetrics: { orderBy: { updatedAt: "desc" }, take: 24 },
             recruitmentOutcomes: { orderBy: { createdAt: "desc" }, take: 5 },
+            agentTaskRuns: {
+              include: { steps: { orderBy: { order: "asc" } } },
+              orderBy: { createdAt: "desc" },
+              take: 3,
+            },
           },
         })
       : null) ?? null;
@@ -467,10 +472,10 @@ function StatsGrid({
   const projectQuery = selectedProjectId ? `project=${selectedProjectId}&` : "";
   const projectMetricHref = (suffix = "") => `/?${projectQuery}view=pipeline${suffix}`;
   const projectItems = [
-    { label: "高证据候选", value: stats.highEvidence, icon: FileSearch, href: projectMetricHref("&candidateFilter=highEvidence"), helper: "查看高证据候选" },
+    { label: "内部召回", value: stats.internal, icon: UserCheck, href: projectMetricHref("&candidateFilter=all"), helper: "查看内部召回候选" },
     { label: "可触达", value: stats.outreachReady, icon: Mail, href: projectMetricHref("&candidateFilter=outreachReady"), helper: "查看可触达候选" },
+    { label: "待复核", value: stats.review, icon: ShieldCheck, href: projectMetricHref("&candidateFilter=review"), helper: "处理候选复核" },
     { label: "试标中", value: stats.trial, icon: ClipboardCheck, href: projectMetricHref("&candidateFilter=trial"), helper: "查看试标候选" },
-    { label: "已入池", value: stats.active, icon: Gauge, href: projectMetricHref("&candidateFilter=active"), helper: "查看入池专家" },
   ];
   const workspaceItems = [
     { label: "项目", value: stats.projects, icon: Database, href: "/?view=projects", helper: "查看项目库" },
@@ -541,7 +546,7 @@ function RecruitmentList({
         {projects.map((project) => (
           <a
             key={project.id}
-            href={`/?project=${project.id}&view=agent`}
+            href={`/?project=${project.id}&view=demand`}
             className={`grid gap-3 rounded-lg border bg-white p-4 shadow-[0_1px_2px_rgba(17,17,17,0.04)] transition hover:border-[#2563eb33] hover:bg-[#fbfdff] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center ${
               selectedProjectId === project.id ? "border-[#2563eb55]" : "border-[#e7e7e2]"
             }`}
@@ -713,6 +718,9 @@ function ProjectWorkspace({
           <ProjectStepTabs projectId={project.id} selectedView={selectedView} />
         </section>
 
+        <RecruitmentFlowBar project={project} selectedView={selectedView} />
+        <LatestAgentRunCard project={project} />
+
         {selectedView === "demand" ? (
           <DemandAndIntakeModule project={project} persona={persona} searchQueries={serialized.searchQueries} />
         ) : selectedView === "supply" ? (
@@ -730,6 +738,18 @@ function ProjectWorkspace({
 }
 
 function ProjectPrimaryAction({ project, selectedView }: { project: ProjectWorkspaceData; selectedView: CanonicalView }) {
+  const recommended = getRecommendedProjectAction(project);
+  if (recommended.kind === "agent") {
+    return (
+      <ApiButton
+        label={recommended.label}
+        endpoint={`/api/projects/${project.id}/run`}
+        icon="run"
+        variant="primary"
+        successLabel="执行计划已生成。"
+      />
+    );
+  }
   if (selectedView === "demand") {
     return <ApiButton label="补齐需求画像" endpoint={`/api/projects/${project.id}/analyze`} icon="analyze" variant="primary" />;
   }
@@ -750,6 +770,214 @@ function ProjectPrimaryAction({ project, selectedView }: { project: ProjectWorks
     return <ApiButton label="生成分发内容" endpoint={`/api/projects/${project.id}/marketing`} icon="marketing" variant="primary" />;
   }
   return null;
+}
+
+function RecruitmentFlowBar({ project, selectedView }: { project: ProjectWorkspaceData; selectedView: CanonicalView }) {
+  const profileReady = Object.keys(parseJson<Record<string, unknown>>(project.personaJson, {})).length > 0;
+  const internalCount = project.candidates.filter((candidate) => candidate.sourceType === "internal").length;
+  const externalCount = project.candidates.filter((candidate) => candidate.sourceType === "external").length;
+  const reviewCount = project.candidates.filter(needsCandidateReview).length;
+  const outreachReady = countOutreachReady(project);
+  const recommended = getRecommendedProjectAction(project);
+  const steps = [
+    { id: "demand", label: "确认需求", href: `/?project=${project.id}&view=demand`, done: profileReady, active: selectedView === "demand", value: profileReady ? "已画像" : "待补齐" },
+    { id: "supply", label: "内部召回", href: `/?project=${project.id}&view=supply`, done: internalCount > 0, active: selectedView === "supply", value: `${internalCount} 位` },
+    { id: "supply-external", label: "补充公开候选", href: `/?project=${project.id}&view=supply`, done: externalCount > 0, active: false, value: `${externalCount} 位` },
+    { id: "pipeline", label: "候选复核", href: `/?project=${project.id}&view=pipeline&candidateFilter=review`, done: reviewCount === 0 && project.candidates.length > 0, active: selectedView === "pipeline", value: `${reviewCount} 待处理` },
+    { id: "outreach", label: "触达/试标", href: `/?project=${project.id}&view=pipeline&candidateFilter=outreachReady`, done: outreachReady > 0, active: false, value: `${outreachReady} 可触达` },
+  ];
+  return (
+    <section data-recruitment-flow className="rounded-lg border border-[#dbe4ee] bg-white p-4 shadow-[0_1px_2px_rgba(17,17,17,0.04)]">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <Sparkles className="size-4 text-[#2563eb]" />
+            <h2 className="text-sm font-semibold text-[#28251e]">当前招募路径</h2>
+            <Badge tone={recommended.tone}>{recommended.stage}</Badge>
+          </div>
+          <p className="mt-1 text-sm leading-6 text-[#5f5a50]">{recommended.description}</p>
+        </div>
+        <PrimaryFlowAction project={project} action={recommended} />
+      </div>
+      <div className="mt-4 grid gap-2 md:grid-cols-5">
+        {steps.map((step, index) => (
+          <Link
+            key={step.id}
+            href={step.href}
+            className={`rounded-lg border px-3 py-3 transition ${
+              step.active
+                ? "border-[#9db7d3] bg-[#eef5ff]"
+                : step.done
+                  ? "border-emerald-100 bg-emerald-50/70 hover:border-emerald-200"
+                  : "border-[#edf0f2] bg-[#f8fafc] hover:border-[#ccd6df] hover:bg-white"
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <span className={`inline-flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${step.done ? "bg-emerald-600 text-white" : step.active ? "bg-[#2563eb] text-white" : "bg-white text-[#7a7469]"}`}>
+                {step.done ? <CheckCircle2 className="size-3.5" /> : index + 1}
+              </span>
+              <span className="min-w-0 truncate text-sm font-semibold text-[#28251e]">{step.label}</span>
+            </span>
+            <span className="mt-2 block truncate text-xs text-[#7a7469]">{step.value}</span>
+          </Link>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+type RecommendedProjectAction =
+  | { kind: "button"; label: string; endpoint: string; icon: "analyze" | "run" | "search" | "marketing"; stage: string; description: string; tone: "blue" | "amber" | "green" | "red" | "indigo" | "zinc"; confirmMessage?: string }
+  | { kind: "link"; label: string; href: string; stage: string; description: string; tone: "blue" | "amber" | "green" | "red" | "indigo" | "zinc" }
+  | { kind: "agent"; label: string; stage: string; description: string; tone: "blue" | "amber" | "green" | "red" | "indigo" | "zinc" };
+
+function getRecommendedProjectAction(project: ProjectWorkspaceData): RecommendedProjectAction {
+  const profileReady = Object.keys(parseJson<Record<string, unknown>>(project.personaJson, {})).length > 0;
+  const internalCount = project.candidates.filter((candidate) => candidate.sourceType === "internal").length;
+  const highEvidenceCount = project.candidates.filter((candidate) => evidenceRankForUi(candidate.expert.evidenceLevel) >= 2).length;
+  const reviewCount = project.candidates.filter(needsCandidateReview).length;
+  const outreachReady = countOutreachReady(project);
+  if (!profileReady) {
+    return {
+      kind: "button",
+      label: "补齐需求画像",
+      endpoint: `/api/projects/${project.id}/analyze`,
+      icon: "analyze",
+      stage: "先确认需求",
+      description: "先把项目需求整理成专家画像、证据要求和搜索方向。",
+      tone: "amber",
+    };
+  }
+  if (!internalCount) {
+    return {
+      kind: "button",
+      label: "召回内部专家",
+      endpoint: `/api/projects/${project.id}/internal-match`,
+      icon: "run",
+      stage: "优先复用内部供给",
+      description: "先从专家库和历史合作记录中找可复用候选。",
+      tone: "blue",
+    };
+  }
+  if (reviewCount > 0) {
+    return {
+      kind: "link",
+      label: "处理候选复核",
+      href: `/?project=${project.id}&view=pipeline&candidateFilter=review`,
+      stage: "处理候选准入",
+      description: `${reviewCount} 位候选需要补证据、确认许可或完成人工复核。`,
+      tone: "amber",
+    };
+  }
+  if (highEvidenceCount < Math.min(project.quantity ?? 5, 5)) {
+    return {
+      kind: "button",
+      label: "确认补充公开候选",
+      endpoint: `/api/projects/${project.id}/external-research`,
+      icon: "search",
+      stage: "供给不足",
+      description: "内部高证据候选不足，确认后再调用外部搜索服务补充公开候选。",
+      tone: "indigo",
+      confirmMessage: "本次会创建外部深搜任务；执行搜索前仍需要在招募助手中确认。继续？",
+    };
+  }
+  if (outreachReady > 0) {
+    return {
+      kind: "link",
+      label: "推进触达",
+      href: `/?project=${project.id}&view=pipeline&candidateFilter=outreachReady`,
+      stage: "可以触达",
+      description: `${outreachReady} 位候选已满足触达门禁，可生成触达草稿或安排试标。`,
+      tone: "green",
+    };
+  }
+  return {
+    kind: "agent",
+    label: "生成完整执行计划",
+    stage: "继续推进",
+    description: "让招募助手重新整理画像、召回、缺口和排序，给出下一步建议。",
+    tone: "blue",
+  };
+}
+
+function PrimaryFlowAction({ project, action }: { project: ProjectWorkspaceData; action: RecommendedProjectAction }) {
+  if (action.kind === "link") {
+    return (
+      <Link href={action.href} className="inline-flex h-10 items-center justify-center rounded-lg bg-[#28251e] px-4 text-sm font-semibold text-white transition hover:bg-black">
+        {action.label}
+      </Link>
+    );
+  }
+  if (action.kind === "agent") {
+    return (
+      <ApiButton
+        label={action.label}
+        endpoint={`/api/projects/${project.id}/run`}
+        icon="run"
+        variant="primary"
+        successLabel="执行计划已生成。"
+      />
+    );
+  }
+  return (
+    <ApiButton
+      label={action.label}
+      endpoint={action.endpoint}
+      icon={action.icon}
+      variant="primary"
+      confirmMessage={action.confirmMessage}
+      successLabel="已更新，正在刷新。"
+    />
+  );
+}
+
+function LatestAgentRunCard({ project }: { project: ProjectWorkspaceData }) {
+  const latest = project.agentTaskRuns[0];
+  if (!latest) return null;
+  const report = parseJson<{
+    summary?: string;
+    completed?: string[];
+    failed?: string[];
+    written?: string[];
+    needsReview?: string[];
+    nextActions?: string[];
+  }>(latest.reportJson, {});
+  const isWaiting = latest.status === "waiting_for_confirmation";
+  const isRunning = latest.status === "running" || latest.status === "planned";
+  return (
+    <section data-latest-agent-run className="rounded-lg border border-[#e7e7e2] bg-white p-4 shadow-[0_1px_2px_rgba(17,17,17,0.04)]">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <MessageSquare className="size-4 text-[#2563eb]" />
+            <h2 className="text-sm font-semibold text-[#28251e]">最近一次招募助手</h2>
+            <Badge tone={agentRunStatusTone(latest.status)}>{formatAgentRunStatus(latest.status)}</Badge>
+          </div>
+          <p className="mt-1 text-sm leading-6 text-[#5f5a50]">{report.summary ?? "执行记录已保存。"}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {(report.written ?? []).slice(0, 3).map((item) => <Badge key={item} tone="blue">{item}</Badge>)}
+            {(report.needsReview ?? []).slice(0, 2).map((item) => <Badge key={item} tone="amber">{item}</Badge>)}
+            {(report.failed ?? []).slice(0, 1).map((item) => <Badge key={item} tone="red">{item}</Badge>)}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2 lg:justify-end">
+          {isWaiting ? (
+            <Link href={`/?project=${project.id}&view=supply`} className="inline-flex h-9 items-center justify-center rounded-lg bg-[#2563eb] px-3 text-sm font-semibold text-white transition hover:bg-[#1d4ed8]">
+              查看确认项
+            </Link>
+          ) : null}
+          {isRunning ? (
+            <Link href={`/?project=${project.id}&view=demand`} className="inline-flex h-9 items-center justify-center rounded-lg border border-[#e7e7e2] bg-white px-3 text-sm font-semibold text-[#28251e] transition hover:bg-[#f9f9f9]">
+              查看进度
+            </Link>
+          ) : null}
+          <Link href={`/?project=${project.id}&view=pipeline&candidateFilter=review`} className="inline-flex h-9 items-center justify-center rounded-lg border border-[#e7e7e2] bg-white px-3 text-sm font-semibold text-[#28251e] transition hover:bg-[#f9f9f9]">
+            处理候选
+          </Link>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function AgentDrawer({ project }: { project: ProjectWorkspaceData }) {
@@ -843,6 +1071,7 @@ function WorkspaceCommandCenter({
     candidates: Array<{
       id: string;
       stage: string;
+      sourceType: string;
       humanReviewNeeded: boolean;
       expert: { evidenceLevel: string };
     }>;
@@ -855,8 +1084,9 @@ function WorkspaceCommandCenter({
       reviewCount: project.candidates.filter((candidate) => candidate.humanReviewNeeded || evidenceRankForUi(candidate.expert.evidenceLevel) < 2).length,
       activeCount: project.candidates.filter((candidate) => ["onboarded", "active"].includes(candidate.stage)).length,
       highEvidenceCount: project.candidates.filter((candidate) => evidenceRankForUi(candidate.expert.evidenceLevel) >= 2).length,
+      internalCount: project.candidates.filter((candidate) => candidate.sourceType === "internal").length,
     }))
-    .sort((a, b) => b.reviewCount - a.reviewCount || b.highEvidenceCount - a.highEvidenceCount)
+    .sort((a, b) => riskPriority(b.project.riskLevel) - riskPriority(a.project.riskLevel) || b.reviewCount - a.reviewCount || b.highEvidenceCount - a.highEvidenceCount)
     .slice(0, 6);
 
   return (
@@ -885,32 +1115,41 @@ function WorkspaceCommandCenter({
       />
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <Panel title="优先项目">
+        <Panel title="项目健康度">
           <div className="grid max-h-[520px] gap-2 overflow-y-auto pr-1">
-            {priorityProjects.map(({ project, reviewCount, activeCount, highEvidenceCount }) => (
+            {priorityProjects.map(({ project, reviewCount, activeCount, highEvidenceCount, internalCount }) => {
+              const action = getWorkspaceProjectAction(project, { reviewCount, activeCount, highEvidenceCount, internalCount });
+              const risk = projectRiskSummary(project, { reviewCount, highEvidenceCount, internalCount });
+              return (
               <Link key={project.id} href={`/?project=${project.id}&view=demand`} className="grid gap-3 rounded-lg border border-[#edf0f2] bg-[#f8fafc] p-3 transition hover:border-[#9db7d3] hover:bg-white">
                 <span className="flex flex-wrap items-center gap-2">
                   <span className="font-semibold text-[#28251e]">{project.title}</span>
                   <RiskBadge risk={project.riskLevel} />
                   <Badge tone="blue">{formatProjectStatus(project.status)}</Badge>
+                  <Badge tone={action.tone}>{action.label}</Badge>
                 </span>
                 <span className="text-sm text-[#5f5a50]">
                   {[project.domain, project.taskType, project.quantity ? `${project.quantity} 位专家` : null].filter(Boolean).join(" · ") || "需求待完善"}
                 </span>
-                <span className="grid grid-cols-3 gap-2">
+                <span className="grid grid-cols-4 gap-2">
+                  <Info label="目标" value={project.quantity?.toString() ?? "-"} />
+                  <Info label="内部" value={internalCount.toString()} />
                   <Info label="高证据" value={highEvidenceCount.toString()} />
                   <Info label="待复核" value={reviewCount.toString()} />
                   <Info label="入池" value={activeCount.toString()} />
                 </span>
+                <span className="text-xs leading-5 text-[#7a7469]">风险：{risk} · 下一步：{action.description}</span>
               </Link>
-            ))}
+              );
+            })}
           </div>
         </Panel>
         <Panel title="工作队列">
           <FunnelRow label="项目" value={stats.projects} tone="blue" />
           <FunnelRow label="待复核" value={stats.review} tone="amber" />
           <FunnelRow label="高证据候选" value={stats.highEvidence} tone="green" />
-          <FunnelRow label="渠道内容" value={stats.marketingPosts} tone="indigo" />
+          <FunnelRow label="可触达" value={stats.outreachReady} tone="blue" />
+          <FunnelRow label="已入池" value={stats.active} tone="green" />
         </Panel>
       </section>
     </section>
@@ -1238,7 +1477,11 @@ function SourcingModule({
   candidateFilter: CandidateFilter;
 }) {
   const filteredCandidates = filterCandidates(project.candidates, candidateFilter);
-  const selectedCandidate = project.candidates.find((candidate) => candidate.id === selectedCandidateId) ?? null;
+  const selectedCandidate =
+    project.candidates.find((candidate) => candidate.id === selectedCandidateId) ??
+    filteredCandidates.find((candidate) => needsCandidateReview(candidate)) ??
+    filteredCandidates[0] ??
+    null;
   return (
     <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
       <div className="grid content-start gap-4">
@@ -2422,14 +2665,7 @@ function CandidateTable({
                 <td className="px-3 py-3">{candidate.humanReviewNeeded ? <Badge tone="amber">待复核</Badge> : <Badge tone="green">已通过</Badge>}</td>
                 <td className="px-5 py-3">
                   <div className="flex gap-2">
-                    <ApiButton label="评分" endpoint={`/api/project-candidates/${candidate.id}/score`} icon="analyze" />
-                    <ApiButton
-                      label="试标"
-                      endpoint={`/api/project-candidates/${candidate.id}/trial`}
-                      icon="trial"
-                      disabled={!canTransitionCandidateStage(candidate.stage, "trial").ok}
-                      disabledReason={trialDisabledReason(candidate.stage)}
-                    />
+                    <CandidateRowAction projectId={projectId} candidate={candidate} />
                   </div>
                 </td>
               </tr>
@@ -2445,6 +2681,53 @@ function CandidateTable({
         </table>
       </div>
     </section>
+  );
+}
+
+function CandidateRowAction({
+  projectId,
+  candidate,
+}: {
+  projectId: string;
+  candidate: {
+    id: string;
+    stage: string;
+    fitScore: number | null;
+    humanReviewNeeded: boolean;
+    expert: {
+      evidenceLevel: string;
+      consentState: string;
+    };
+  };
+}) {
+  if (candidate.humanReviewNeeded || evidenceRankForUi(candidate.expert.evidenceLevel) < 2) {
+    return (
+      <Link href={`/?project=${projectId}&view=pipeline&candidate=${candidate.id}`} className="inline-flex h-9 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 text-sm font-semibold text-amber-800 transition hover:bg-amber-100">
+        查看证据
+      </Link>
+    );
+  }
+  if (candidate.fitScore === null) {
+    return <ApiButton label="补评分" endpoint={`/api/project-candidates/${candidate.id}/score`} icon="analyze" />;
+  }
+  if (candidate.stage === "verified" || candidate.stage === "approved_for_outreach") {
+    return <ApiButton label="生成触达" endpoint={`/api/project-candidates/${candidate.id}/outreach`} icon="outreach" />;
+  }
+  if (candidate.stage === "contacted" || candidate.stage === "replied" || candidate.stage === "screening") {
+    return (
+      <ApiButton
+        label="开始试标"
+        endpoint={`/api/project-candidates/${candidate.id}/trial`}
+        icon="trial"
+        disabled={!canTransitionCandidateStage(candidate.stage, "trial").ok}
+        disabledReason={trialDisabledReason(candidate.stage)}
+      />
+    );
+  }
+  return (
+    <Link href={`/?project=${projectId}&view=pipeline&candidate=${candidate.id}`} className="inline-flex h-9 items-center justify-center rounded-lg border border-[#e7e7e2] bg-white px-3 text-sm font-semibold text-[#28251e] transition hover:border-[#d8d8d0] hover:bg-[#f9f9f9]">
+      查看详情
+    </Link>
   );
 }
 
@@ -3039,6 +3322,61 @@ function formatRunStatus(status: string) {
     failed: "未完成",
   };
   return labels[status] ?? status;
+}
+
+function formatAgentRunStatus(status: string) {
+  const labels: Record<string, string> = {
+    planned: "计划已生成",
+    preflight_failed: "前置条件不足",
+    waiting_for_confirmation: "等待确认",
+    running: "执行中",
+    succeeded: "已完成",
+    partially_succeeded: "部分完成",
+    failed: "未完成",
+    cancelled: "已取消",
+  };
+  return labels[status] ?? status;
+}
+
+function agentRunStatusTone(status: string): "blue" | "amber" | "green" | "red" | "indigo" | "zinc" {
+  if (status === "succeeded") return "green";
+  if (status === "waiting_for_confirmation" || status === "planned" || status === "running") return "amber";
+  if (status === "failed" || status === "preflight_failed") return "red";
+  if (status === "partially_succeeded") return "indigo";
+  return "zinc";
+}
+
+function riskPriority(risk: string) {
+  const priorities: Record<string, number> = { regulated: 4, high: 3, medium: 2, low: 1 };
+  return priorities[risk] ?? 0;
+}
+
+function getWorkspaceProjectAction(
+  project: {
+    status: string;
+    quantity: number | null;
+    personaJson?: string;
+  },
+  counts: { reviewCount: number; activeCount: number; highEvidenceCount: number; internalCount: number },
+) {
+  const profileReady = Object.keys(parseJson<Record<string, unknown>>(project.personaJson ?? "{}", {})).length > 0 || project.status === "analyzed";
+  if (!profileReady) return { label: "补画像", description: "补齐需求画像", tone: "amber" as const };
+  if (!counts.internalCount) return { label: "召回内部", description: "先复用专家库", tone: "blue" as const };
+  if (counts.reviewCount > 0) return { label: "待复核", description: "处理候选准入", tone: "amber" as const };
+  if (counts.highEvidenceCount < Math.min(project.quantity ?? 5, 5)) return { label: "补供给", description: "确认外部深搜", tone: "indigo" as const };
+  if (counts.activeCount < Math.min(project.quantity ?? 1, 1)) return { label: "推进触达", description: "生成触达或试标", tone: "green" as const };
+  return { label: "稳定", description: "保持复盘和回流", tone: "green" as const };
+}
+
+function projectRiskSummary(
+  project: { riskLevel: string; quantity: number | null },
+  counts: { reviewCount: number; highEvidenceCount: number; internalCount: number },
+) {
+  if (project.riskLevel === "regulated" || project.riskLevel === "high") return "强制人工审批";
+  if (counts.reviewCount > 0) return `${counts.reviewCount} 项待复核`;
+  if (!counts.internalCount) return "尚未复用内部供给";
+  if (counts.highEvidenceCount < Math.min(project.quantity ?? 5, 5)) return "高证据候选不足";
+  return "暂无主要阻塞";
 }
 
 function evidenceRankForUi(level: string) {

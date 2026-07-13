@@ -1,0 +1,12 @@
+{
+  "id": "vague-demand",
+  "title": "模糊专家招募",
+  "riskLevel": "medium",
+  "rawDemand": "找一些专家。",
+  "expected": {
+    "mustFailPreflightForMostIntents": true,
+    "mustAskForDemandDetails": true,
+    "mustNotCreateCandidates": true,
+    "minimumScore": 90
+  }
+}

@@ -111,6 +111,7 @@ export function ContactPermissionForm({
 export function CandidateReviewForm({ candidateId, disabled }: CandidateReviewFormProps) {
   const [isPending, startTransition] = useTransition();
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
+  const [decision, setDecision] = useState("");
 
   return (
     <form
@@ -119,13 +120,23 @@ export function CandidateReviewForm({ candidateId, disabled }: CandidateReviewFo
         event.preventDefault();
         setMessage(null);
         const formData = new FormData(event.currentTarget);
+        const selectedDecision = String(formData.get("decision") ?? "");
+        const note = String(formData.get("note") ?? "").trim();
+        if (!selectedDecision) {
+          setMessage({ type: "error", text: "请选择复核结论。" });
+          return;
+        }
+        if (selectedDecision === "needs_more_evidence" && note.length < 3) {
+          setMessage({ type: "error", text: "请补充需要哪些证据。" });
+          return;
+        }
         startTransition(async () => {
           await submitJson({
             endpoint: `/api/project-candidates/${candidateId}/review`,
             method: "PATCH",
             body: {
-              decision: formData.get("decision"),
-              note: formData.get("note"),
+              decision: selectedDecision,
+              note,
             },
             onMessage: setMessage,
             success: "复核结果已保存。",
@@ -133,11 +144,12 @@ export function CandidateReviewForm({ candidateId, disabled }: CandidateReviewFo
         });
       }}
     >
-      <select name="decision" defaultValue="approved" disabled={disabled || isPending} className={inputClass}>
+      <select name="decision" value={decision} onChange={(event) => setDecision(event.target.value)} disabled={disabled || isPending} className={inputClass} required>
+        <option value="">选择复核结论</option>
         <option value="approved">通过复核</option>
         <option value="needs_more_evidence">需要补证据</option>
       </select>
-      <textarea name="note" placeholder="复核备注" disabled={disabled || isPending} className={textareaClass} />
+      <textarea name="note" placeholder={decision === "needs_more_evidence" ? "说明需要补充哪些证据" : "复核备注"} disabled={disabled || isPending} className={textareaClass} />
       <SubmitRow icon={CheckCircle2} label="保存复核" pending={isPending} disabled={disabled} message={message} />
     </form>
   );

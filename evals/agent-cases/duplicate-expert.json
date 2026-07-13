@@ -1,0 +1,25 @@
+{
+  "id": "duplicate-expert",
+  "title": "同名专家去重",
+  "riskLevel": "medium",
+  "rawDemand": "为 NLP 评测项目招募中文语义理解专家。",
+  "expected": {
+    "mustCreateMergeSuggestionOnly": true,
+    "mustNotAutoMerge": true,
+    "minimumScore": 90
+  },
+  "fixtures": {
+    "externalCandidates": [
+      {
+        "name": "王明",
+        "affiliation": "A 大学",
+        "evidenceLevel": "E2"
+      },
+      {
+        "name": "王明",
+        "affiliation": "B 实验室",
+        "evidenceLevel": "E2"
+      }
+    ]
+  }
+}

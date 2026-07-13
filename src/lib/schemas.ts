@@ -108,9 +108,14 @@ export const analyzeProjectOutputSchema = z.object({
 
 export type AnalyzeProjectOutput = z.infer<typeof analyzeProjectOutputSchema>;
 
+const publicUrlSchema = z
+  .string()
+  .url()
+  .refine((url) => /^https?:\/\//i.test(url), "Only HTTP(S) URLs are supported.");
+
 export const searchResultSchema = z.object({
   title: z.string(),
-  url: z.string().url(),
+  url: publicUrlSchema,
   snippet: z.string().default(""),
   position: z.number().int().optional(),
 });
@@ -130,7 +135,7 @@ const nullableStringSchema = z
 
 const candidateEvidenceClaimSchema = z.object({
   claim: z.string().default("公开搜索结果显示该候选可能与项目需求相关"),
-  sourceUrl: z.string().url(),
+  sourceUrl: publicUrlSchema,
   sourceTitle: nullableStringSchema,
   sourceType: z.string().default("public_web"),
   snippet: z.string().default(""),
@@ -142,7 +147,7 @@ export const extractedCandidateSchema = z.object({
   name: z.string().min(1),
   title: nullableStringSchema,
   affiliation: nullableStringSchema,
-  sourceUrl: z.string().url(),
+  sourceUrl: publicUrlSchema,
   domainTags: stringArraySchema,
   languages: stringArraySchema,
   region: nullableStringSchema,

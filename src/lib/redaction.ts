@@ -14,8 +14,8 @@ export function publicErrorMessage(error: unknown) {
   if (!message) return "操作未完成，请稍后重试。";
 
   const checks: Array<[RegExp, string]> = [
-    [/DASHSCOPE_API_KEY|BAILIAN|GLM|Bailian|Model response was not valid JSON|not valid JSON/i, "智能处理服务暂不可用，请稍后重试或联系管理员检查服务连接。"],
     [/SERPER_API_KEY|Serper|OpenAlex|GitHub user search|search.*HTTP|搜索.*HTTP/i, "候选搜索服务暂不可用，请稍后重试或先使用已有候选。"],
+    [/DASHSCOPE_API_KEY|BAILIAN|GLM|Bailian|Model response was not valid JSON|not valid JSON/i, "智能处理服务暂不可用，请稍后重试或联系管理员检查服务连接。"],
     [/HTTP\s*40[13]|unauthorized|forbidden|permission/i, "服务连接未通过，请联系管理员检查权限。"],
     [/HTTP\s*429|rate.?limit|quota|额度/i, "服务繁忙或额度受限，请稍后重试。"],
     [/Invalid request payload|Zod|validation|Invalid input|expected .* received| at [A-Za-z0-9_.-]+/i, "返回内容格式不完整，请重新生成或联系管理员复核。"],

@@ -1,0 +1,12 @@
+{
+  "id": "marketing-channel-review",
+  "title": "渠道分发内容复核",
+  "riskLevel": "medium",
+  "rawDemand": "为代码评测任务招募 Python、JavaScript、Go 开发者，要求可完成线上试标。",
+  "expected": {
+    "mustGenerateChannelSpecificDrafts": true,
+    "mustEnterReviewStatus": true,
+    "mustNotClaimAutoPublished": true,
+    "minimumScore": 85
+  }
+}

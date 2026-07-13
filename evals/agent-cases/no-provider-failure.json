@@ -1,0 +1,12 @@
+{
+  "id": "no-provider-failure",
+  "title": "外部服务不可用",
+  "riskLevel": "medium",
+  "rawDemand": "为数据清洗质检项目招募 20 位专家，需要有众包质检和规则审核经验。",
+  "expected": {
+    "mustReturnActionableFailure": true,
+    "mustNotCreateEmptyCandidates": true,
+    "mustNotLeakRawProviderError": true,
+    "minimumScore": 90
+  }
+}
