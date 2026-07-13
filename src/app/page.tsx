@@ -260,7 +260,7 @@ export default async function Home({ searchParams }: PageProps) {
                 {projects.map((project) => (
                   <a
                     key={project.id}
-                    href={`/?project=${project.id}&view=${isProjectView(selectedView) ? selectedView : "demand"}`}
+                    href={`/?project=${project.id}&view=${selectedView === "agent" ? "agent" : isProjectView(selectedView) ? selectedView : "demand"}`}
                     className={`grid gap-1 rounded-lg px-3 py-2.5 text-sm transition ${
                       selectedProject?.id === project.id
                         ? "bg-[#eef5ff] text-[#28251e]"
@@ -302,7 +302,7 @@ export default async function Home({ searchParams }: PageProps) {
             {isProjectView(selectedView) ? (
               <MobileProjectSwitcher projects={projects} selectedProject={selectedProject} selectedView={selectedView} />
             ) : null}
-            <StatsGrid stats={stats} selectedProjectId={selectedProject?.id ?? null} selectedView={selectedView} />
+            {selectedView === "agent" ? null : <StatsGrid stats={stats} selectedProjectId={selectedProject?.id ?? null} selectedView={selectedView} />}
             {selectedProject && isProjectView(selectedView) ? (
               <ProjectWorkspace
                 project={selectedProject}
@@ -333,7 +333,7 @@ export default async function Home({ searchParams }: PageProps) {
             ) : selectedView === "review" ? (
               <ReviewModule reviewCandidates={reviewCandidates} reviewMarketingPosts={reviewMarketingPosts} events={selectedProject?.auditEvents ?? []} />
             ) : selectedView === "agent" ? (
-              <WorkspaceCommandCenter projects={projects} stats={stats} />
+              <WorkspaceCommandCenter projects={projects} selectedProject={selectedProject} stats={stats} />
             ) : projects.length ? (
               <ProjectSelectionGate projects={projects} targetView={selectedView} />
             ) : (
@@ -1058,6 +1058,7 @@ function ProjectStepTabs({ projectId, selectedView }: { projectId: string; selec
 
 function WorkspaceCommandCenter({
   projects,
+  selectedProject,
   stats,
 }: {
   projects: Array<{
@@ -1076,9 +1077,10 @@ function WorkspaceCommandCenter({
       expert: { evidenceLevel: string };
     }>;
   }>;
+  selectedProject: ProjectWorkspaceData | null;
   stats: Record<string, number>;
 }) {
-  const priorityProjects = projects
+  const rankedProjects = projects
     .map((project) => ({
       project,
       reviewCount: project.candidates.filter((candidate) => candidate.humanReviewNeeded || evidenceRankForUi(candidate.expert.evidenceLevel) < 2).length,
@@ -1089,69 +1091,230 @@ function WorkspaceCommandCenter({
     .sort((a, b) => riskPriority(b.project.riskLevel) - riskPriority(a.project.riskLevel) || b.reviewCount - a.reviewCount || b.highEvidenceCount - a.highEvidenceCount)
     .slice(0, 6);
 
+  if (!selectedProject) {
+    return (
+      <section className="grid gap-4">
+        <div className="rounded-lg border border-[#e2e6ea] bg-white p-5 shadow-[0_1px_2px_rgba(17,17,17,0.04)]">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+            <div>
+              <h1 className="text-xl font-semibold text-[#28251e]">招募助手</h1>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-[#5f5a50]">
+                选择一个项目后，先让助手生成执行计划，再确认召回、搜索、复核和触达准备。
+              </p>
+            </div>
+            <Link href="/?view=projects#create-project" className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-[#28251e] px-3 text-sm font-semibold text-white transition hover:bg-black">
+              <Sparkles className="size-4" />
+              创建项目
+            </Link>
+          </div>
+        </div>
+
+        <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+          <Panel title="继续一个项目">
+            <div className="grid max-h-[520px] gap-2 overflow-y-auto pr-1">
+              {rankedProjects.map(({ project, reviewCount, activeCount, highEvidenceCount, internalCount }) => {
+                const action = getWorkspaceProjectAction(project, { reviewCount, activeCount, highEvidenceCount, internalCount });
+                return (
+                  <Link key={project.id} href={`/?project=${project.id}&view=agent`} className="grid gap-3 rounded-lg border border-[#edf0f2] bg-[#f8fafc] p-3 transition hover:border-[#9db7d3] hover:bg-white">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold text-[#28251e]">{project.title}</span>
+                      <RiskBadge risk={project.riskLevel} />
+                      <Badge tone={action.tone}>{action.label}</Badge>
+                    </span>
+                    <span className="text-sm text-[#5f5a50]">
+                      {[project.domain, project.taskType, project.quantity ? `${project.quantity} 位专家` : null].filter(Boolean).join(" · ") || "需求待完善"}
+                    </span>
+                    <span className="grid grid-cols-4 gap-2">
+                      <Info label="内部" value={internalCount.toString()} />
+                      <Info label="高证据" value={highEvidenceCount.toString()} />
+                      <Info label="待复核" value={reviewCount.toString()} />
+                      <Info label="入池" value={activeCount.toString()} />
+                    </span>
+                    <span className="text-xs leading-5 text-[#7a7469]">下一步：{action.description}</span>
+                  </Link>
+                );
+              })}
+              {!rankedProjects.length ? <p className="rounded-lg border border-dashed border-[#d8d8d0] bg-[#f9f9f9] p-4 text-sm text-[#7a7469]">先创建一个招募项目。</p> : null}
+            </div>
+          </Panel>
+
+          <div className="grid content-start gap-4">
+            <NewUserGuide
+              title="推荐路径"
+              steps={[
+                "选择或创建项目",
+                "生成执行计划",
+                "确认敏感动作",
+                "处理复核和试标",
+              ]}
+            />
+            <Panel title="工作量概览">
+              <FunnelRow label="项目" value={stats.projects} tone="blue" />
+              <FunnelRow label="待复核" value={stats.review} tone="amber" />
+              <FunnelRow label="高证据候选" value={stats.highEvidence} tone="green" />
+              <FunnelRow label="可触达" value={stats.outreachReady} tone="blue" />
+            </Panel>
+          </div>
+        </section>
+      </section>
+    );
+  }
+
+  const projectReviewCount = selectedProject.candidates.filter(needsCandidateReview).length;
+  const internalCount = selectedProject.candidates.filter((candidate) => candidate.sourceType === "internal").length;
+  const externalCount = selectedProject.candidates.filter((candidate) => candidate.sourceType === "external").length;
+  const highEvidenceCount = selectedProject.candidates.filter((candidate) => evidenceRankForUi(candidate.expert.evidenceLevel) >= 2).length;
+  const outreachReady = countOutreachReady(selectedProject);
+  const activeCount = selectedProject.candidates.filter((candidate) => ["onboarded", "active"].includes(candidate.stage)).length;
+  const recommended = getWorkspaceProjectAction(selectedProject, { reviewCount: projectReviewCount, activeCount, highEvidenceCount, internalCount });
+
   return (
     <section className="grid gap-4">
       <div className="rounded-lg border border-[#e2e6ea] bg-white p-5 shadow-[0_1px_2px_rgba(17,17,17,0.04)]">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-xl font-semibold text-[#28251e]">招募指挥台</h1>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-[#5f5a50]">查看项目供给进度，优先处理复核、可触达候选和渠道待审批内容。</p>
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-xl font-semibold text-[#28251e]">招募助手</h1>
+              <Badge tone={recommended.tone}>{recommended.label}</Badge>
+            </div>
+            <p className="mt-2 max-w-4xl text-sm leading-6 text-[#5f5a50]">
+              当前项目：{selectedProject.title}。先生成计划，再执行可恢复的步骤；外部搜索、触达和发布仍需要人工确认。
+            </p>
           </div>
-          <Link href="/?view=projects#create-project" className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-[#28251e] px-3 text-sm font-semibold text-white transition hover:bg-black">
-            <Sparkles className="size-4" />
-            新建项目
-          </Link>
+          <div className="flex flex-wrap gap-2 lg:justify-end">
+            <Link href={`/?project=${selectedProject.id}&view=pipeline&candidateFilter=review`} className="inline-flex h-9 items-center justify-center rounded-lg bg-[#28251e] px-3 text-sm font-semibold text-white transition hover:bg-black">
+              处理复核
+            </Link>
+            <Link href={`/?project=${selectedProject.id}&view=demand`} className="inline-flex h-9 items-center justify-center rounded-lg border border-[#dbe4ee] bg-white px-3 text-sm font-semibold text-[#28251e] transition hover:border-[#9db7d3] hover:bg-[#fbfdff]">
+              项目详情
+            </Link>
+          </div>
         </div>
       </div>
 
-      <NewUserGuide
-        title="从这里开始"
-        steps={[
-          "在项目库创建招募项目，写清楚专家要求和目标数量。",
-          "进入项目后补齐需求画像，再运行内部专家召回。",
-          "候选进入复核后，处理证据、风险和可触达状态。",
-          "需要扩大获客时，生成渠道内容并在渠道中心确认发布进展。",
-        ]}
-      />
+      <section className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)] 2xl:grid-cols-[280px_minmax(0,1fr)_360px]">
+        <div className="order-2 grid content-start gap-4 xl:order-1">
+          <Panel title="当前项目">
+            <div className="grid gap-2">
+              <Info label="目标" value={selectedProject.quantity?.toString() ?? "-"} />
+              <Info label="内部召回" value={internalCount.toString()} />
+              <Info label="公开候选" value={externalCount.toString()} />
+              <Info label="高证据" value={highEvidenceCount.toString()} />
+              <Info label="待复核" value={projectReviewCount.toString()} />
+              <Info label="可触达" value={outreachReady.toString()} />
+            </div>
+          </Panel>
+          <AgentFlowChecklist project={selectedProject} reviewCount={projectReviewCount} internalCount={internalCount} externalCount={externalCount} outreachReady={outreachReady} />
+        </div>
 
-      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <Panel title="项目健康度">
-          <div className="grid max-h-[520px] gap-2 overflow-y-auto pr-1">
-            {priorityProjects.map(({ project, reviewCount, activeCount, highEvidenceCount, internalCount }) => {
-              const action = getWorkspaceProjectAction(project, { reviewCount, activeCount, highEvidenceCount, internalCount });
-              const risk = projectRiskSummary(project, { reviewCount, highEvidenceCount, internalCount });
-              return (
-              <Link key={project.id} href={`/?project=${project.id}&view=demand`} className="grid gap-3 rounded-lg border border-[#edf0f2] bg-[#f8fafc] p-3 transition hover:border-[#9db7d3] hover:bg-white">
-                <span className="flex flex-wrap items-center gap-2">
-                  <span className="font-semibold text-[#28251e]">{project.title}</span>
-                  <RiskBadge risk={project.riskLevel} />
-                  <Badge tone="blue">{formatProjectStatus(project.status)}</Badge>
-                  <Badge tone={action.tone}>{action.label}</Badge>
-                </span>
-                <span className="text-sm text-[#5f5a50]">
-                  {[project.domain, project.taskType, project.quantity ? `${project.quantity} 位专家` : null].filter(Boolean).join(" · ") || "需求待完善"}
-                </span>
-                <span className="grid grid-cols-4 gap-2">
-                  <Info label="目标" value={project.quantity?.toString() ?? "-"} />
-                  <Info label="内部" value={internalCount.toString()} />
-                  <Info label="高证据" value={highEvidenceCount.toString()} />
-                  <Info label="待复核" value={reviewCount.toString()} />
-                  <Info label="入池" value={activeCount.toString()} />
-                </span>
-                <span className="text-xs leading-5 text-[#7a7469]">风险：{risk} · 下一步：{action.description}</span>
-              </Link>
-              );
-            })}
+        <section className="order-1 rounded-lg border border-[#e7e7e2] bg-white p-4 shadow-[0_1px_2px_rgba(17,17,17,0.04)] xl:order-2">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-[#28251e]">和招募助手推进</h2>
+              <p className="mt-1 text-sm leading-6 text-[#5f5a50]">选择任务，生成计划；确认后再执行会写入数据的步骤。</p>
+            </div>
+            <Badge tone={selectedProject.riskLevel === "regulated" || selectedProject.riskLevel === "high" ? "red" : "amber"}>
+              {formatRiskLevel(selectedProject.riskLevel)}
+            </Badge>
           </div>
-        </Panel>
-        <Panel title="工作队列">
-          <FunnelRow label="项目" value={stats.projects} tone="blue" />
-          <FunnelRow label="待复核" value={stats.review} tone="amber" />
-          <FunnelRow label="高证据候选" value={stats.highEvidence} tone="green" />
-          <FunnelRow label="可触达" value={stats.outreachReady} tone="blue" />
-          <FunnelRow label="已入池" value={stats.active} tone="green" />
-        </Panel>
+          <AgentCommandForm projectId={selectedProject.id} projectTitle={selectedProject.title} />
+        </section>
+
+        <div className="order-3 grid content-start gap-4 xl:col-span-2 2xl:col-span-1">
+          <AgentOutcomePanel project={selectedProject} />
+          <Panel title="下一步">
+            <div className="grid gap-2">
+              <Link href={`/?project=${selectedProject.id}&view=pipeline&candidateFilter=review`} className="rounded-lg border border-[#edf0f2] bg-[#f8fafc] px-3 py-2 text-sm font-semibold text-[#28251e] transition hover:border-[#9db7d3] hover:bg-white">
+                处理候选复核
+              </Link>
+              <Link href={`/?project=${selectedProject.id}&view=supply`} className="rounded-lg border border-[#edf0f2] bg-[#f8fafc] px-3 py-2 text-sm font-semibold text-[#28251e] transition hover:border-[#9db7d3] hover:bg-white">
+                查看供给发现
+              </Link>
+              <Link href={`/?project=${selectedProject.id}&view=growth`} className="rounded-lg border border-[#edf0f2] bg-[#f8fafc] px-3 py-2 text-sm font-semibold text-[#28251e] transition hover:border-[#9db7d3] hover:bg-white">
+                准备分发和复盘
+              </Link>
+            </div>
+          </Panel>
+        </div>
       </section>
+    </section>
+  );
+}
+
+function AgentFlowChecklist({
+  project,
+  reviewCount,
+  internalCount,
+  externalCount,
+  outreachReady,
+}: {
+  project: ProjectWorkspaceData;
+  reviewCount: number;
+  internalCount: number;
+  externalCount: number;
+  outreachReady: number;
+}) {
+  const profileReady = Object.keys(parseJson<Record<string, unknown>>(project.personaJson, {})).length > 0 || project.status === "analyzed";
+  const steps = [
+    { label: "确认需求", value: profileReady ? "已画像" : "待补齐", done: profileReady, href: `/?project=${project.id}&view=demand` },
+    { label: "召回内部专家", value: `${internalCount} 位`, done: internalCount > 0, href: `/?project=${project.id}&view=supply` },
+    { label: "补充公开候选", value: `${externalCount} 位`, done: externalCount > 0, href: `/?project=${project.id}&view=supply` },
+    { label: "处理复核", value: `${reviewCount} 项`, done: reviewCount === 0 && project.candidates.length > 0, href: `/?project=${project.id}&view=pipeline&candidateFilter=review` },
+    { label: "触达/试标", value: `${outreachReady} 可触达`, done: outreachReady > 0, href: `/?project=${project.id}&view=pipeline&candidateFilter=outreachReady` },
+  ];
+  return (
+    <Panel title="招募路径">
+      <div className="grid gap-2">
+        {steps.map((step, index) => (
+          <Link key={step.label} href={step.href} className="flex items-center gap-3 rounded-lg border border-[#edf0f2] bg-[#f8fafc] px-3 py-2 transition hover:border-[#9db7d3] hover:bg-white">
+            <span className={`inline-flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${step.done ? "bg-emerald-600 text-white" : "bg-white text-[#7a7469]"}`}>
+              {step.done ? <CheckCircle2 className="size-3.5" /> : index + 1}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-semibold text-[#28251e]">{step.label}</span>
+              <span className="block truncate text-xs text-[#7a7469]">{step.value}</span>
+            </span>
+          </Link>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function AgentOutcomePanel({ project }: { project: ProjectWorkspaceData }) {
+  const latest = project.agentTaskRuns[0];
+  if (!latest) {
+    return (
+      <Panel title="执行结果">
+        <p className="text-sm leading-6 text-[#5f5a50]">还没有任务记录。先生成执行计划，系统会保存每一步的状态和结果。</p>
+      </Panel>
+    );
+  }
+  const report = parseJson<{
+    summary?: string;
+    failed?: string[];
+    written?: string[];
+    needsReview?: string[];
+    nextActions?: string[];
+  }>(latest.reportJson, {});
+  return (
+    <section className="rounded-lg border border-[#e7e7e2] bg-white p-4 shadow-[0_1px_2px_rgba(17,17,17,0.04)]">
+      <div className="flex flex-wrap items-center gap-2">
+        <MessageSquare className="size-4 text-[#2563eb]" />
+        <h3 className="text-sm font-semibold text-[#28251e]">最近一次任务</h3>
+        <Badge tone={agentRunStatusTone(latest.status)}>{formatAgentRunStatus(latest.status)}</Badge>
+      </div>
+      <p className="mt-2 text-sm leading-6 text-[#5f5a50]">{report.summary ?? "任务记录已保存。"}</p>
+      <div className="mt-3 grid gap-2">
+        {(report.written ?? []).slice(0, 3).map((item) => <Badge key={item} tone="blue">{item}</Badge>)}
+        {(report.needsReview ?? []).slice(0, 3).map((item) => <Badge key={item} tone="amber">{item}</Badge>)}
+        {(report.failed ?? []).slice(0, 2).map((item) => <Badge key={item} tone="red">{item}</Badge>)}
+      </div>
+      <div className="mt-3 grid gap-2">
+        {(report.nextActions ?? ["生成或执行下一步任务。"]).slice(0, 3).map((item) => (
+          <p key={item} className="rounded-lg border border-[#edf0f2] bg-[#f8fafc] px-3 py-2 text-xs leading-5 text-[#5f5a50]">{item}</p>
+        ))}
+      </div>
     </section>
   );
 }
@@ -3366,17 +3529,6 @@ function getWorkspaceProjectAction(
   if (counts.highEvidenceCount < Math.min(project.quantity ?? 5, 5)) return { label: "补供给", description: "确认外部深搜", tone: "indigo" as const };
   if (counts.activeCount < Math.min(project.quantity ?? 1, 1)) return { label: "推进触达", description: "生成触达或试标", tone: "green" as const };
   return { label: "稳定", description: "保持复盘和回流", tone: "green" as const };
-}
-
-function projectRiskSummary(
-  project: { riskLevel: string; quantity: number | null },
-  counts: { reviewCount: number; highEvidenceCount: number; internalCount: number },
-) {
-  if (project.riskLevel === "regulated" || project.riskLevel === "high") return "强制人工审批";
-  if (counts.reviewCount > 0) return `${counts.reviewCount} 项待复核`;
-  if (!counts.internalCount) return "尚未复用内部供给";
-  if (counts.highEvidenceCount < Math.min(project.quantity ?? 5, 5)) return "高证据候选不足";
-  return "暂无主要阻塞";
 }
 
 function evidenceRankForUi(level: string) {
