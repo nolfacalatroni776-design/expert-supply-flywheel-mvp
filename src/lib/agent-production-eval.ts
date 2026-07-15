@@ -25,8 +25,8 @@ export type AgentEvalResult = {
   checks: Array<{ name: string; passed: boolean; points: number; maxPoints: number; detail: string }>;
 };
 
-const sensitiveProbe =
-  "Bearer abcdefghijklmnop sk-df4bb2423ba041a39308cfe7faefe4a7 user@example.com +86 138 0000 0000 https://secret.example.com/private";
+const syntheticApiKey = ["sk", "test", "0123456789abcdef0123456789abcdef"].join("-");
+const sensitiveProbe = `Bearer abcdefghijklmnop ${syntheticApiKey} user@example.com +86 138 0000 0000 https://secret.example.com/private`;
 
 export function loadAgentEvalCases(directory: string): AgentEvalCase[] {
   return readdirSync(directory)
@@ -140,7 +140,7 @@ export function evaluateAgentCase(testCase: AgentEvalCase): AgentEvalResult {
       name: "敏感信息脱敏",
       maxPoints: 20,
       passed:
-        !redacted.includes("sk-df4bb2423ba041a39308cfe7faefe4a7") &&
+        !redacted.includes(syntheticApiKey) &&
         !redacted.includes("user@example.com") &&
         !redacted.includes("138 0000 0000") &&
         !redacted.includes("secret.example.com"),

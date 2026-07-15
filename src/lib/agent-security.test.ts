@@ -5,16 +5,17 @@ import { publicErrorMessage, redactForAudit, redactSensitiveText } from "@/lib/r
 
 describe("agent production safety gates", () => {
   it("redacts secrets from public reports and audit payloads", () => {
+    const syntheticApiKey = ["sk", "test", "0123456789abcdef0123456789abcdef"].join("-");
     const raw =
-      "Bearer abcdefghijklmnop sk-df4bb2423ba041a39308cfe7faefe4a7 admin@example.com +86 138 0000 0000 https://secret.example.com/private";
+      `Bearer abcdefghijklmnop ${syntheticApiKey} admin@example.com +86 138 0000 0000 https://secret.example.com/private`;
     const redacted = redactSensitiveText(raw);
-    expect(redacted).not.toContain("sk-df4bb2423ba041a39308cfe7faefe4a7");
+    expect(redacted).not.toContain(syntheticApiKey);
     expect(redacted).not.toContain("admin@example.com");
     expect(redacted).not.toContain("138 0000 0000");
     expect(redacted).not.toContain("secret.example.com");
 
     const audit = redactForAudit({ raw, nested: { token: raw } });
-    expect(JSON.stringify(audit)).not.toContain("sk-df4bb2423ba041a39308cfe7faefe4a7");
+    expect(JSON.stringify(audit)).not.toContain(syntheticApiKey);
   });
 
   it("turns provider failures into operator-readable messages", () => {
