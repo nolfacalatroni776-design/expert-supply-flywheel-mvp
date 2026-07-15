@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS Expert (
   languagesJson TEXT NOT NULL DEFAULT '[]',
   region TEXT,
   contactJson TEXT NOT NULL DEFAULT '{}',
+  identityKey TEXT NOT NULL,
   sourceUrl TEXT,
   evidenceLevel TEXT NOT NULL DEFAULT 'E0',
   consentState TEXT NOT NULL DEFAULT 'unknown',
@@ -312,6 +313,11 @@ CREATE TABLE IF NOT EXISTS AgentTaskRun (
   contextSnapshotJson TEXT NOT NULL DEFAULT '{}',
   reportJson TEXT NOT NULL DEFAULT '{}',
   errorMessage TEXT,
+  workflowRunId TEXT,
+  executionToken TEXT,
+  leaseExpiresAt DATETIME,
+  heartbeatAt DATETIME,
+  attempt INTEGER NOT NULL DEFAULT 0,
   createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   startedAt DATETIME,
@@ -328,10 +334,14 @@ CREATE TABLE IF NOT EXISTS AgentTaskStep (
   "order" INTEGER NOT NULL,
   requiresConfirmation BOOLEAN NOT NULL DEFAULT 0,
   confirmedAt DATETIME,
+  confirmationDecision TEXT,
+  confirmationReason TEXT,
+  decidedAt DATETIME,
   inputJson TEXT NOT NULL DEFAULT '{}',
   outputJson TEXT NOT NULL DEFAULT '{}',
   checksJson TEXT NOT NULL DEFAULT '{}',
   errorMessage TEXT,
+  attempt INTEGER NOT NULL DEFAULT 0,
   startedAt DATETIME,
   completedAt DATETIME,
   createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -340,7 +350,8 @@ CREATE TABLE IF NOT EXISTS AgentTaskStep (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ProjectCandidate_projectId_expertId_key ON ProjectCandidate(projectId, expertId);
-CREATE UNIQUE INDEX IF NOT EXISTS Expert_sourceUrl_key ON Expert(sourceUrl);
+CREATE UNIQUE INDEX IF NOT EXISTS Expert_identityKey_key ON Expert(identityKey);
+CREATE INDEX IF NOT EXISTS Expert_sourceUrl_idx ON Expert(sourceUrl);
 CREATE INDEX IF NOT EXISTS Expert_name_idx ON Expert(name);
 DELETE FROM SearchResult
 WHERE id NOT IN (
@@ -395,7 +406,9 @@ CREATE INDEX IF NOT EXISTS RecruitmentOutcome_createdAt_idx ON RecruitmentOutcom
 CREATE INDEX IF NOT EXISTS AgentTaskRun_projectId_idx ON AgentTaskRun(projectId);
 CREATE INDEX IF NOT EXISTS AgentTaskRun_intent_idx ON AgentTaskRun(intent);
 CREATE INDEX IF NOT EXISTS AgentTaskRun_status_idx ON AgentTaskRun(status);
+CREATE INDEX IF NOT EXISTS AgentTaskRun_status_leaseExpiresAt_idx ON AgentTaskRun(status, leaseExpiresAt);
 CREATE INDEX IF NOT EXISTS AgentTaskRun_createdAt_idx ON AgentTaskRun(createdAt);
+CREATE UNIQUE INDEX IF NOT EXISTS AgentTaskRun_workflowRunId_key ON AgentTaskRun(workflowRunId);
 CREATE UNIQUE INDEX IF NOT EXISTS AgentTaskStep_runId_stepKey_key ON AgentTaskStep(runId, stepKey);
 CREATE INDEX IF NOT EXISTS AgentTaskStep_runId_idx ON AgentTaskStep(runId);
 CREATE INDEX IF NOT EXISTS AgentTaskStep_status_idx ON AgentTaskStep(status);
@@ -412,12 +425,22 @@ ALTER TABLE Project ADD COLUMN supplyGoalJson TEXT NOT NULL DEFAULT '{}';
 ALTER TABLE Expert ADD COLUMN expertType TEXT NOT NULL DEFAULT 'external';
 ALTER TABLE Expert ADD COLUMN lastActiveAt DATETIME;
 ALTER TABLE Expert ADD COLUMN qualitySummaryJson TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE Expert ADD COLUMN identityKey TEXT;
 ALTER TABLE ProjectCandidate ADD COLUMN sourceType TEXT NOT NULL DEFAULT 'external';
 ALTER TABLE ProjectCandidate ADD COLUMN sourceRunId TEXT;
 ALTER TABLE ProjectCandidate ADD COLUMN conversionProbability REAL;
 ALTER TABLE ProjectCandidate ADD COLUMN rankReasonJson TEXT NOT NULL DEFAULT '{}';
 ALTER TABLE SearchResult ADD COLUMN searchRunId TEXT;
 ALTER TABLE SearchResult ADD COLUMN sourceType TEXT NOT NULL DEFAULT 'public_web';
+ALTER TABLE AgentTaskRun ADD COLUMN workflowRunId TEXT;
+ALTER TABLE AgentTaskRun ADD COLUMN executionToken TEXT;
+ALTER TABLE AgentTaskRun ADD COLUMN leaseExpiresAt DATETIME;
+ALTER TABLE AgentTaskRun ADD COLUMN heartbeatAt DATETIME;
+ALTER TABLE AgentTaskRun ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE AgentTaskStep ADD COLUMN confirmationDecision TEXT;
+ALTER TABLE AgentTaskStep ADD COLUMN confirmationReason TEXT;
+ALTER TABLE AgentTaskStep ADD COLUMN decidedAt DATETIME;
+ALTER TABLE AgentTaskStep ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0;
 `;
 
 for (const statement of migrationSql.split(";").map((item) => item.trim()).filter(Boolean)) {
@@ -429,11 +452,22 @@ for (const statement of migrationSql.split(";").map((item) => item.trim()).filte
 }
 
 const postMigrationSql = `
+UPDATE Expert
+SET identityKey = CASE
+  WHEN sourceUrl IS NULL OR TRIM(sourceUrl) = '' THEN 'expert:' || id
+  ELSE LOWER(RTRIM(sourceUrl, '/')) || '#person=' || LOWER(REPLACE(name, ' ', ''))
+END
+WHERE identityKey IS NULL OR TRIM(identityKey) = '';
+DROP INDEX IF EXISTS Expert_sourceUrl_key;
+CREATE UNIQUE INDEX IF NOT EXISTS Expert_identityKey_key ON Expert(identityKey);
+CREATE INDEX IF NOT EXISTS Expert_sourceUrl_idx ON Expert(sourceUrl);
 CREATE INDEX IF NOT EXISTS Expert_expertType_idx ON Expert(expertType);
 CREATE INDEX IF NOT EXISTS Expert_lastActiveAt_idx ON Expert(lastActiveAt);
 CREATE INDEX IF NOT EXISTS SearchResult_searchRunId_idx ON SearchResult(searchRunId);
 CREATE INDEX IF NOT EXISTS ProjectCandidate_sourceType_idx ON ProjectCandidate(sourceType);
 CREATE INDEX IF NOT EXISTS ProjectCandidate_sourceRunId_idx ON ProjectCandidate(sourceRunId);
+CREATE INDEX IF NOT EXISTS AgentTaskRun_status_leaseExpiresAt_idx ON AgentTaskRun(status, leaseExpiresAt);
+CREATE UNIQUE INDEX IF NOT EXISTS AgentTaskRun_workflowRunId_key ON AgentTaskRun(workflowRunId);
 `;
 
 execFileSync("sqlite3", [absoluteDbPath, postMigrationSql], { stdio: "inherit" });

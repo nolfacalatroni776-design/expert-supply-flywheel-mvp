@@ -10,6 +10,7 @@ export const PIPELINE_STAGES = [
   "contracting",
   "onboarded",
   "active",
+  "screened_out",
   "do_not_contact",
 ] as const;
 

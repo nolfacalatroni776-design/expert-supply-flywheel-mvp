@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "prisma generate",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -14,22 +15,27 @@
     "test:unit": "vitest run 'src/**/*.test.ts'",
     "test:agent": "vitest run src/lib/agent-production-eval.test.ts src/lib/agent-trajectory.test.ts src/lib/agent-security.test.ts src/lib/agent-cost-control.test.ts src/lib/agent-api-boundaries.test.ts src/lib/agent-quality.test.ts src/lib/agent-runtime.test.ts src/lib/agent-tasks.test.ts",
     "test:agent:integration": "tsx scripts/test-agent-runtime-integration.ts",
+    "test:workflow": "vitest run --config vitest.workflow.config.ts",
+    "smoke:live": "tsx scripts/live-production-flow.ts",
     "test:watch": "vitest",
     "eval:agent": "tsx scripts/run-agent-evals.ts",
     "smoke:prod": "tsx scripts/smoke-production.ts",
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
     "db:init": "tsx prisma/init-sqlite.ts",
     "db:seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
-    "@prisma/client": "^6.19.0",
+    "@opentelemetry/api": "^1.9.0",
+    "@prisma/client": "^6.19.3",
     "clsx": "^2.1.1",
     "lucide-react": "^1.23.0",
     "next": "16.2.10",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "workflow": "^4.6.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -38,12 +44,16 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitest/coverage-v8": "^4.1.9",
+    "@workflow/vitest": "^4.0.12",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
-    "prisma": "^6.19.0",
+    "prisma": "^6.19.3",
     "tailwindcss": "^4",
     "tsx": "^4.22.4",
     "typescript": "^5",
     "vitest": "^4.1.9"
+  },
+  "overrides": {
+    "postcss": "8.5.16"
   }
 }

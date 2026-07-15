@@ -22,6 +22,9 @@ export async function ensureRuntimeDatabase(client: PrismaClient) {
   if (process.env.ENABLE_RUNTIME_DB_INIT !== "1") {
     return;
   }
+  if (!process.env.DATABASE_URL?.startsWith("file:")) {
+    return;
+  }
 
   initPromise ??= initializeRuntimeDatabase(client);
   return initPromise;
@@ -35,12 +38,52 @@ async function initializeRuntimeDatabase(client: PrismaClient) {
     await client.$executeRawUnsafe(`${statement};`);
   }
 
+  await ensureSqliteExpertIdentity(client);
+  await ensureSqliteAgentWorkflowColumns(client);
+
   const projectCount = await client.project.count();
   if (projectCount > 0) {
     return;
   }
 
   await seedTrialData(client);
+}
+
+async function ensureSqliteExpertIdentity(client: PrismaClient) {
+  try {
+    await client.$executeRawUnsafe("ALTER TABLE Expert ADD COLUMN identityKey TEXT;");
+  } catch {
+    // Fresh databases already include the column.
+  }
+  await client.$executeRawUnsafe(`
+    UPDATE Expert
+    SET identityKey = CASE
+      WHEN sourceUrl IS NULL OR TRIM(sourceUrl) = '' THEN 'expert:' || id
+      ELSE LOWER(RTRIM(sourceUrl, '/')) || '#person=' || LOWER(REPLACE(name, ' ', ''))
+    END
+    WHERE identityKey IS NULL OR TRIM(identityKey) = '';
+  `);
+  await client.$executeRawUnsafe("DROP INDEX IF EXISTS Expert_sourceUrl_key;");
+  await client.$executeRawUnsafe("CREATE UNIQUE INDEX IF NOT EXISTS Expert_identityKey_key ON Expert(identityKey);");
+  await client.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS Expert_sourceUrl_idx ON Expert(sourceUrl);");
+}
+
+async function ensureSqliteAgentWorkflowColumns(client: PrismaClient) {
+  for (const statement of [
+    "ALTER TABLE AgentTaskRun ADD COLUMN workflowRunId TEXT;",
+    "ALTER TABLE AgentTaskStep ADD COLUMN confirmationDecision TEXT;",
+    "ALTER TABLE AgentTaskStep ADD COLUMN confirmationReason TEXT;",
+    "ALTER TABLE AgentTaskStep ADD COLUMN decidedAt DATETIME;",
+  ]) {
+    try {
+      await client.$executeRawUnsafe(statement);
+    } catch {
+      // Fresh databases already include the column.
+    }
+  }
+  await client.$executeRawUnsafe(
+    "CREATE UNIQUE INDEX IF NOT EXISTS AgentTaskRun_workflowRunId_key ON AgentTaskRun(workflowRunId);",
+  );
 }
 
 const runtimeSchemaSql = `
@@ -75,6 +118,7 @@ CREATE TABLE IF NOT EXISTS Expert (
   languagesJson TEXT NOT NULL DEFAULT '[]',
   region TEXT,
   contactJson TEXT NOT NULL DEFAULT '{}',
+  identityKey TEXT NOT NULL,
   sourceUrl TEXT,
   evidenceLevel TEXT NOT NULL DEFAULT 'E0',
   consentState TEXT NOT NULL DEFAULT 'unknown',
@@ -344,6 +388,11 @@ CREATE TABLE IF NOT EXISTS AgentTaskRun (
   contextSnapshotJson TEXT NOT NULL DEFAULT '{}',
   reportJson TEXT NOT NULL DEFAULT '{}',
   errorMessage TEXT,
+  workflowRunId TEXT,
+  executionToken TEXT,
+  leaseExpiresAt DATETIME,
+  heartbeatAt DATETIME,
+  attempt INTEGER NOT NULL DEFAULT 0,
   createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   startedAt DATETIME,
@@ -360,10 +409,14 @@ CREATE TABLE IF NOT EXISTS AgentTaskStep (
   "order" INTEGER NOT NULL,
   requiresConfirmation BOOLEAN NOT NULL DEFAULT 0,
   confirmedAt DATETIME,
+  confirmationDecision TEXT,
+  confirmationReason TEXT,
+  decidedAt DATETIME,
   inputJson TEXT NOT NULL DEFAULT '{}',
   outputJson TEXT NOT NULL DEFAULT '{}',
   checksJson TEXT NOT NULL DEFAULT '{}',
   errorMessage TEXT,
+  attempt INTEGER NOT NULL DEFAULT 0,
   startedAt DATETIME,
   completedAt DATETIME,
   createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -372,7 +425,6 @@ CREATE TABLE IF NOT EXISTS AgentTaskStep (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ProjectCandidate_projectId_expertId_key ON ProjectCandidate(projectId, expertId);
-CREATE UNIQUE INDEX IF NOT EXISTS Expert_sourceUrl_key ON Expert(sourceUrl);
 CREATE INDEX IF NOT EXISTS Expert_name_idx ON Expert(name);
 CREATE INDEX IF NOT EXISTS Expert_expertType_idx ON Expert(expertType);
 CREATE INDEX IF NOT EXISTS Expert_lastActiveAt_idx ON Expert(lastActiveAt);
@@ -426,7 +478,9 @@ CREATE INDEX IF NOT EXISTS RecruitmentOutcome_createdAt_idx ON RecruitmentOutcom
 CREATE INDEX IF NOT EXISTS AgentTaskRun_projectId_idx ON AgentTaskRun(projectId);
 CREATE INDEX IF NOT EXISTS AgentTaskRun_intent_idx ON AgentTaskRun(intent);
 CREATE INDEX IF NOT EXISTS AgentTaskRun_status_idx ON AgentTaskRun(status);
+CREATE INDEX IF NOT EXISTS AgentTaskRun_status_leaseExpiresAt_idx ON AgentTaskRun(status, leaseExpiresAt);
 CREATE INDEX IF NOT EXISTS AgentTaskRun_createdAt_idx ON AgentTaskRun(createdAt);
+CREATE UNIQUE INDEX IF NOT EXISTS AgentTaskRun_workflowRunId_key ON AgentTaskRun(workflowRunId);
 CREATE UNIQUE INDEX IF NOT EXISTS AgentTaskStep_runId_stepKey_key ON AgentTaskStep(runId, stepKey);
 CREATE INDEX IF NOT EXISTS AgentTaskStep_runId_idx ON AgentTaskStep(runId);
 CREATE INDEX IF NOT EXISTS AgentTaskStep_status_idx ON AgentTaskStep(status);
@@ -474,6 +528,7 @@ async function seedTrialData(client: PrismaClient) {
       name: "内部专家 李医生",
       title: "影像科副主任医师",
       affiliation: "历史合作专家库",
+      identityKey: "https://expert-ops.local/internal/expert/radiology-mentor#person=内部专家李医生",
       sourceUrl: "https://expert-ops.local/internal/expert/radiology-mentor",
       domainTagsJson: JSON.stringify(["医学影像", "胸部 CT", "肺结节", "质控"]),
       languagesJson: JSON.stringify(["中文"]),
@@ -496,6 +551,7 @@ async function seedTrialData(client: PrismaClient) {
       name: "待核验候选 张医生",
       title: "放射科主治医师",
       affiliation: "公开资料待核验机构",
+      identityKey: "https://example.com/radiology-expert#person=待核验候选张医生",
       sourceUrl: "https://example.com/radiology-expert",
       domainTagsJson: JSON.stringify(["医学影像", "胸部 CT", "肺结节"]),
       languagesJson: JSON.stringify(["中文"]),

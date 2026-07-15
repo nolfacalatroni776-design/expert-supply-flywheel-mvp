@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { serializeCandidate, serializeProject } from "@/lib/serializers";
 import { createProjectSchema } from "@/lib/schemas";
 import { writeAuditEvent } from "@/lib/audit";
+import { getInitialProjectRiskLevel } from "@/lib/gates";
 
 export async function GET() {
   const projects = await prisma.project.findMany({
@@ -38,6 +39,7 @@ export async function POST(request: Request) {
         budgetMax: payload.budgetMax,
         languagesJson: stringifyJson(payload.languages),
         regionsJson: stringifyJson(payload.regions),
+        riskLevel: getInitialProjectRiskLevel(payload),
       },
     });
 

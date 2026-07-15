@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  filterCandidatesBySourceRun,
+  getCandidatePipelineHref,
   getProjectSteps,
   getWorkspaceNavItems,
   isCandidateFilter,
@@ -43,12 +45,52 @@ describe("navigation", () => {
 
   it("accepts candidate filter routes used by KPI links", () => {
     expect(isCandidateFilter("all")).toBe(true);
+    expect(isCandidateFilter("external")).toBe(true);
     expect(isCandidateFilter("highEvidence")).toBe(true);
     expect(isCandidateFilter("outreachReady")).toBe(true);
     expect(isCandidateFilter("review")).toBe(true);
     expect(isCandidateFilter("trial")).toBe(true);
     expect(isCandidateFilter("active")).toBe(true);
+    expect(isCandidateFilter("screenedOut")).toBe(true);
     expect(isCandidateFilter("outreach")).toBe(false);
+  });
+
+  it("scopes a task result link to candidates from the selected search run", () => {
+    const candidates = [
+      { id: "current", sourceRunId: "search-run-5" },
+      { id: "historical", sourceRunId: "search-run-2" },
+      { id: "manual", sourceRunId: null },
+    ];
+
+    expect(filterCandidatesBySourceRun(candidates, "search-run-5").map((candidate) => candidate.id)).toEqual(["current"]);
+    expect(filterCandidatesBySourceRun(candidates, null)).toEqual(candidates);
+  });
+
+  it("keeps a candidate visible in an older run after a later run finds the same person", () => {
+    const candidates = [
+      {
+        id: "repeated-candidate",
+        sourceRunId: "new-run",
+        discoveries: [{ searchRunId: "old-run" }, { searchRunId: "new-run" }],
+      },
+    ];
+
+    expect(filterCandidatesBySourceRun(candidates, "old-run").map((candidate) => candidate.id)).toEqual([
+      "repeated-candidate",
+    ]);
+  });
+
+  it("keeps the candidate filter and search run when opening evidence", () => {
+    expect(
+      getCandidatePipelineHref({
+        projectId: "project 1",
+        candidateId: "candidate 2",
+        candidateFilter: "external",
+        sourceRunId: "search run 3",
+      }),
+    ).toBe(
+      "/?project=project+1&view=pipeline&candidateFilter=external&candidate=candidate+2&sourceRun=search+run+3",
+    );
   });
 
   it("accepts marketing status filters used by channel queue links", () => {

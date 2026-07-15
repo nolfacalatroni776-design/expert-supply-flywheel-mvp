@@ -16,15 +16,20 @@ export function publicErrorMessage(error: unknown) {
   const checks: Array<[RegExp, string]> = [
     [/SERPER_API_KEY|Serper|OpenAlex|GitHub user search|search.*HTTP|搜索.*HTTP/i, "候选搜索服务暂不可用，请稍后重试或先使用已有候选。"],
     [/DASHSCOPE_API_KEY|BAILIAN|GLM|Bailian|Model response was not valid JSON|not valid JSON/i, "智能处理服务暂不可用，请稍后重试或联系管理员检查服务连接。"],
+    [/fetch failed|network request failed|ECONN|ETIMEDOUT|ENOTFOUND|socket|terminated/i, "智能处理服务暂不可用，请稍后重试。"],
     [/HTTP\s*40[13]|unauthorized|forbidden|permission/i, "服务连接未通过，请联系管理员检查权限。"],
     [/HTTP\s*429|rate.?limit|quota|额度/i, "服务繁忙或额度受限，请稍后重试。"],
     [/Invalid request payload|Zod|validation|Invalid input|expected .* received| at [A-Za-z0-9_.-]+/i, "返回内容格式不完整，请重新生成或联系管理员复核。"],
     [/Marketing campaign output did not contain any channel posts|missed requested channels|channel posts/i, "渠道内容未生成完整，请重新生成渠道草稿。"],
-    [/Project not found/i, "项目不存在或已被删除。"],
+    [/Project not found|项目不存在|已被删除/i, "项目数据暂不可用，请返回项目库重新打开。若在试用工作区，数据可能已重置。"],
     [/Candidate not found/i, "候选人不存在或已被删除。"],
     [/Expert not found/i, "专家资料不存在或已被删除。"],
     [/Marketing post not found/i, "渠道内容不存在或已被删除。"],
     [/Cannot transition|Invalid pipeline|Invalid marketing post status/i, "当前状态不能执行该动作，请先完成前置步骤。"],
+    [
+      /prisma\.|PrismaClient|Invalid `.*` invocation|Unknown argument|SQLSTATE|relation .* does not exist|column .* does not exist/i,
+      "任务服务暂不可用，请稍后重试。若问题持续，请联系管理员更新服务。",
+    ],
     [/Unknown server error|server error|HTTP\s*5\d\d/i, "操作未完成，请稍后重试。"],
   ];
 

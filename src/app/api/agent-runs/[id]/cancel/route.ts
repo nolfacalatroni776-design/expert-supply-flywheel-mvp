@@ -1,4 +1,5 @@
 import { cancelAgentTaskRun } from "@/lib/agent-runtime";
+import { cancelDurableAgentTaskWorkflow } from "@/lib/agent-workflow-runtime";
 import { apiError, apiOk, handleRouteError } from "@/lib/http";
 
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -6,6 +7,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     const { id } = await params;
     const run = await cancelAgentTaskRun(id);
     if (!run) return apiError("任务不存在或已被删除。", 404);
+    await cancelDurableAgentTaskWorkflow(id);
     return apiOk({ run });
   } catch (error) {
     return handleRouteError(error);

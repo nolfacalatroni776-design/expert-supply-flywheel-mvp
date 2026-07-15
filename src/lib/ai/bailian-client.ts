@@ -30,6 +30,10 @@ type BailianChatResponse = {
   };
 };
 
+const MAX_MODEL_ATTEMPTS = 3;
+const MAX_OUTPUT_ATTEMPTS = 2;
+const DEFAULT_TIMEOUT_MS = 30_000;
+
 export class MissingBailianKeyError extends Error {
   constructor() {
     super("DASHSCOPE_API_KEY is not configured.");
@@ -41,19 +45,35 @@ export class BailianClient {
   private readonly apiKey: string | undefined;
   private readonly baseUrl: string;
   private readonly models: string[];
+  private readonly timeoutMs: number;
+  private readonly maxAttempts: number;
+  private readonly maxOutputAttempts: number;
 
-  constructor(options?: { apiKey?: string; baseUrl?: string; model?: string }) {
+  constructor(options?: {
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+    timeoutMs?: number;
+    maxAttempts?: number;
+    maxOutputAttempts?: number;
+  }) {
     this.apiKey = options?.apiKey ?? process.env.DASHSCOPE_API_KEY;
     this.baseUrl =
       options?.baseUrl ??
       process.env.DASHSCOPE_BASE_URL ??
       "https://dashscope.aliyuncs.com/compatible-mode/v1";
-    const primaryModel = options?.model ?? process.env.BAILIAN_MODEL ?? "ZHIPU/GLM-5.2";
-    const fallbackModels = (process.env.BAILIAN_FALLBACK_MODELS ?? "glm-5.2")
+    this.timeoutMs = parsePositiveInteger(options?.timeoutMs ?? process.env.BAILIAN_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
+    this.maxAttempts = Math.min(MAX_MODEL_ATTEMPTS, parsePositiveInteger(options?.maxAttempts, MAX_MODEL_ATTEMPTS));
+    this.maxOutputAttempts = Math.min(
+      MAX_OUTPUT_ATTEMPTS,
+      parsePositiveInteger(options?.maxOutputAttempts, MAX_OUTPUT_ATTEMPTS),
+    );
+    const primaryModel = options?.model ?? process.env.BAILIAN_MODEL ?? "glm-5.2";
+    const fallbackModels = (process.env.BAILIAN_FALLBACK_MODELS ?? "")
       .split(",")
       .map((model) => model.trim())
       .filter(Boolean);
-    this.models = Array.from(new Set([primaryModel, ...fallbackModels]));
+    this.models = Array.from(new Set([primaryModel, ...fallbackModels, "glm-5.2"]));
   }
 
   async runStructured<T>({
@@ -73,10 +93,16 @@ export class BailianClient {
 
     let lastFailure: BailianResult<T> | null = null;
     for (const model of this.models) {
-      const result = await this.callModel<T>({ taskName, systemPrompt, userPayload, schema, model });
-      if (result.ok) return result;
-      lastFailure = result;
-      if (!shouldTryFallback(result)) {
+      let result: BailianResult<T> | null = null;
+      let repairFeedback = "";
+      for (let outputAttempt = 1; outputAttempt <= this.maxOutputAttempts; outputAttempt += 1) {
+        result = await this.callModel<T>({ taskName, systemPrompt, userPayload, schema, model, repairFeedback });
+        if (result.ok) return result;
+        lastFailure = result;
+        if (outputAttempt >= this.maxOutputAttempts || !shouldRetryStructuredOutput(result)) break;
+        repairFeedback = result.error.slice(0, 1_500);
+      }
+      if (result && !shouldTryFallback(result)) {
         return result;
       }
     }
@@ -95,20 +121,16 @@ export class BailianClient {
     userPayload,
     schema,
     model,
+    repairFeedback,
   }: {
     taskName: string;
     systemPrompt: string;
     userPayload: unknown;
     schema: ZodType<T>;
     model: string;
+    repairFeedback?: string;
   }): Promise<BailianResult<T>> {
-    const response = await fetch(`${this.baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const requestBody = JSON.stringify({
         model,
         messages: [
           {
@@ -116,8 +138,11 @@ export class BailianClient {
             content: [
               systemPrompt,
               "Return only valid JSON. Do not wrap the JSON in Markdown fences.",
+              repairFeedback
+                ? `The previous response did not satisfy the required JSON structure. Return a complete corrected object. Validation feedback: ${repairFeedback}`
+                : "",
               `Task name: ${taskName}`,
-            ].join("\n\n"),
+            ].filter(Boolean).join("\n\n"),
           },
           {
             role: "user",
@@ -128,10 +153,51 @@ export class BailianClient {
         response_format: { type: "json_object" },
         enable_thinking: false,
         reasoning_effort: "none",
-      }),
-    });
+      });
+    const responseUrl = `${this.baseUrl.replace(/\/$/, "")}/chat/completions`;
+    let response: Response | null = null;
+    let body: BailianChatResponse = {};
+    let networkError = "";
 
-    const body = (await response.json().catch(() => ({}))) as BailianChatResponse;
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+      const timeout = createTimeoutSignal(this.timeoutMs);
+      try {
+        response = await fetch(responseUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: requestBody,
+          signal: timeout.signal,
+        });
+        body = (await response.json().catch(() => ({}))) as BailianChatResponse;
+        if (!shouldRetryHttp(response.status) || attempt === this.maxAttempts) break;
+      } catch (error) {
+        networkError = error instanceof Error ? error.message : "Network request failed.";
+        if (attempt === this.maxAttempts) {
+          return {
+            ok: false,
+            rawText: "",
+            usage: null,
+            error: `Bailian network request failed: ${networkError}`,
+          };
+        }
+      } finally {
+        timeout.cancel();
+      }
+      await waitBeforeRetry(attempt);
+    }
+
+    if (!response) {
+      return {
+        ok: false,
+        rawText: "",
+        usage: null,
+        error: `Bailian network request failed${networkError ? `: ${networkError}` : "."}`,
+      };
+    }
+
     const rawText = body.choices?.[0]?.message?.content ?? "";
     const usage = body.usage ?? null;
 
@@ -183,12 +249,41 @@ export class BailianClient {
   }
 }
 
+function shouldRetryStructuredOutput(result: { status?: number; error: string; rawText: string }) {
+  if (result.status) return false;
+  if (result.rawText.trim()) return true;
+  return /empty response|not valid json/i.test(result.error);
+}
+
 function shouldTryFallback(result: { status?: number; error: string }) {
   const error = result.error.toLowerCase();
   if ([400, 403, 404, 422].includes(result.status ?? 0)) {
     return /model|access|permission|unsupported|parameter|not found|not available/.test(error);
   }
   return false;
+}
+
+function shouldRetryHttp(status: number) {
+  return status === 429 || status >= 500;
+}
+
+function waitBeforeRetry(attempt: number) {
+  if (process.env.NODE_ENV === "test") return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, attempt * 250));
+}
+
+function createTimeoutSignal(timeoutMs: number) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return {
+    signal: controller.signal,
+    cancel: () => clearTimeout(timer),
+  };
+}
+
+function parsePositiveInteger(value: string | number | undefined, fallback: number) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback;
 }
 
 export function parseModelJson(rawText: string):

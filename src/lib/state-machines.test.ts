@@ -27,6 +27,12 @@ describe("canTransitionCandidateStage", () => {
     expect(canTransitionCandidateStage("do_not_contact", "contacted").ok).toBe(false);
   });
 
+  it("keeps screened-out candidates out of outreach but allows a later verified review", () => {
+    expect(canTransitionCandidateStage("sourced", "screened_out")).toEqual({ ok: true });
+    expect(canTransitionCandidateStage("screened_out", "contacted").ok).toBe(false);
+    expect(canTransitionCandidateStage("screened_out", "verified")).toEqual({ ok: true });
+  });
+
   it("requires candidate reply or screening before trial", () => {
     expect(canTransitionCandidateStage("verified", "trial").ok).toBe(false);
     expect(canTransitionCandidateStage("contacted", "trial").ok).toBe(false);

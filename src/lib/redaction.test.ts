@@ -21,4 +21,19 @@ describe("redaction", () => {
     expect(redacted.error).toBe("token sk-***");
     expect(redacted.nested.email).toBe("[redacted-email]");
   });
+
+  it("turns missing project errors into a recoverable workspace message", () => {
+    expect(publicErrorMessage("Project not found.")).toContain("返回项目库重新打开");
+    expect(publicErrorMessage("项目不存在或已被删除。")).toContain("返回项目库重新打开");
+  });
+
+  it("does not expose database client internals to operators", () => {
+    const prismaError = `Invalid \`prisma.agentTaskRun.updateMany()\` invocation:\nUnknown argument \`executionToken\`. Available options are marked with ?.`;
+    const message = publicErrorMessage(prismaError);
+
+    expect(message).toBe("任务服务暂不可用，请稍后重试。若问题持续，请联系管理员更新服务。");
+    expect(message).not.toContain("prisma");
+    expect(message).not.toContain("executionToken");
+    expect(message).not.toContain("Unknown argument");
+  });
 });

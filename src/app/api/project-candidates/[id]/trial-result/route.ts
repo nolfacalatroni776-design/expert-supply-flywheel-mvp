@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { trialResultSchema } from "@/lib/schemas";
 import { recordExpertQualityEvent } from "@/lib/supply-flywheel";
 import { writeAuditEvent } from "@/lib/audit";
+import { getTrialResultCandidateUpdate } from "@/lib/trial-approval";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -26,7 +27,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const latestTrial = candidate.trialTasks[0];
     if (!latestTrial) return apiError("No trial task exists for this candidate.", 409);
 
-    const nextStage = payload.outcome === "passed" ? "onboarded" : "trial";
+    const candidateUpdate = getTrialResultCandidateUpdate(payload.outcome);
     const [trial, updatedCandidate] = await prisma.$transaction([
       prisma.trialTask.update({
         where: { id: latestTrial.id },
@@ -34,11 +35,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       }),
       prisma.projectCandidate.update({
         where: { id: candidate.id },
-        data: {
-          stage: nextStage,
-          humanReviewNeeded: true,
-          nextAction: payload.outcome === "passed" ? "试标通过，等待入池复核。" : "试标结果需继续处理。",
-        },
+        data: candidateUpdate,
       }),
     ]);
 

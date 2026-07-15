@@ -87,7 +87,7 @@ async function main() {
   });
 
   const expert = await prisma.expert.upsert({
-    where: { sourceUrl: "https://example.com/radiology-expert" },
+    where: { identityKey: "https://example.com/radiology-expert#person=待核验候选张医生" },
     update: {
       name: "待核验候选 张医生",
       title: "放射科主治医师",
@@ -101,6 +101,7 @@ async function main() {
       expertType: "external",
     },
     create: {
+      identityKey: "https://example.com/radiology-expert#person=待核验候选张医生",
       name: "待核验候选 张医生",
       title: "放射科主治医师",
       affiliation: "公开资料待核验机构",
@@ -146,7 +147,7 @@ async function main() {
   });
 
   const internalExpert = await prisma.expert.upsert({
-    where: { sourceUrl: "https://expert-ops.local/internal/expert/radiology-mentor" },
+    where: { identityKey: "https://expert-ops.local/internal/expert/radiology-mentor#person=内部专家李医生" },
     update: {
       name: "内部专家 李医生",
       title: "影像科副主任医师",
@@ -166,6 +167,7 @@ async function main() {
       qualitySummaryJson: JSON.stringify({ averageScore: 91, metricCount: 2, eventCount: 3 }),
     },
     create: {
+      identityKey: "https://expert-ops.local/internal/expert/radiology-mentor#person=内部专家李医生",
       name: "内部专家 李医生",
       title: "影像科副主任医师",
       affiliation: "历史合作专家库",

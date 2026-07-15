@@ -43,7 +43,7 @@ describe("agent production safety gates", () => {
 
     expect(gate).toEqual({
       ok: false,
-      reason: "Regulated or high-risk project requires human review before outreach.",
+      reason: "高风险或受监管项目需完成人工复核后才能生成触达草稿。",
     });
   });
 
@@ -66,4 +66,3 @@ describe("agent production safety gates", () => {
     expect(report.failed[0]).toContain("候选搜索服务暂不可用");
   });
 });
-

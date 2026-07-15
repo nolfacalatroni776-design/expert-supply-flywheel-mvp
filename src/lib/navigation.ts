@@ -20,7 +20,7 @@ export type CanonicalView =
   | "pipeline"
   | "growth";
 
-export type CandidateFilter = "all" | "highEvidence" | "outreachReady" | "review" | "trial" | "active";
+export type CandidateFilter = "all" | "external" | "highEvidence" | "outreachReady" | "review" | "trial" | "active" | "screenedOut";
 export type MarketingPostStatusFilter = "all" | "draft" | "needs_review" | "approved" | "scheduled" | "published" | "archived";
 
 export const legacyViewToCanonicalView: Record<string, CanonicalView> = {
@@ -58,7 +58,39 @@ export function isProjectView(view: CanonicalView) {
 }
 
 export function isCandidateFilter(value: unknown): value is CandidateFilter {
-  return value === "all" || value === "highEvidence" || value === "outreachReady" || value === "review" || value === "trial" || value === "active";
+  return value === "all" || value === "external" || value === "highEvidence" || value === "outreachReady" || value === "review" || value === "trial" || value === "active" || value === "screenedOut";
+}
+
+export function filterCandidatesBySourceRun<
+  T extends { sourceRunId?: string | null; discoveries?: Array<{ searchRunId: string }> },
+>(candidates: T[], sourceRunId?: string | null) {
+  if (!sourceRunId) return candidates;
+  return candidates.filter(
+    (candidate) =>
+      candidate.sourceRunId === sourceRunId ||
+      candidate.discoveries?.some((discovery) => discovery.searchRunId === sourceRunId),
+  );
+}
+
+export function getCandidatePipelineHref({
+  projectId,
+  candidateId,
+  candidateFilter = "all",
+  sourceRunId,
+}: {
+  projectId: string;
+  candidateId: string;
+  candidateFilter?: CandidateFilter;
+  sourceRunId?: string | null;
+}) {
+  const params = new URLSearchParams({
+    project: projectId,
+    view: "pipeline",
+    candidateFilter,
+    candidate: candidateId,
+  });
+  if (sourceRunId) params.set("sourceRun", sourceRunId);
+  return `/?${params.toString()}`;
 }
 
 export function isMarketingPostStatusFilter(value: unknown): value is MarketingPostStatusFilter {

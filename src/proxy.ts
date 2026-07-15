@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
+import { resolveAccessProtection } from "@/lib/access-protection";
 
 export function proxy(request: NextRequest) {
   const user = process.env.TRIAL_BASIC_AUTH_USER;
   const password = process.env.TRIAL_BASIC_AUTH_PASSWORD;
+  const protection = resolveAccessProtection({ environment: process.env.NODE_ENV, user, password });
 
-  if (!user || !password) {
+  if (protection === "disabled") {
     return NextResponse.next();
+  }
+  if (protection === "misconfigured" || !user || !password) {
+    return new NextResponse("Access protection is not configured.", {
+      status: 503,
+      headers: { "Cache-Control": "no-store" },
+    });
   }
 
   const authorization = request.headers.get("authorization");
@@ -45,5 +53,5 @@ function parseBasicAuth(authorization: string | null) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|.well-known/workflow/).*)"],
 };

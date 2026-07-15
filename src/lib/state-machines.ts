@@ -13,17 +13,18 @@ const marketingTransitions: Record<MarketingPostStatus, MarketingPostStatus[]> =
 };
 
 const candidateTransitions: Record<PipelineStage, PipelineStage[]> = {
-  sourced: ["enriched", "verified", "do_not_contact"],
-  enriched: ["verified", "screening", "do_not_contact"],
-  verified: ["approved_for_outreach", "screening", "do_not_contact"],
-  approved_for_outreach: ["contacted", "do_not_contact"],
-  contacted: ["replied", "screening", "do_not_contact"],
-  replied: ["screening", "trial", "do_not_contact"],
-  screening: ["trial", "contracting", "do_not_contact"],
-  trial: ["contracting", "onboarded", "do_not_contact"],
-  contracting: ["onboarded", "active", "do_not_contact"],
+  sourced: ["enriched", "verified", "screened_out", "do_not_contact"],
+  enriched: ["verified", "screening", "screened_out", "do_not_contact"],
+  verified: ["approved_for_outreach", "screening", "screened_out", "do_not_contact"],
+  approved_for_outreach: ["contacted", "screened_out", "do_not_contact"],
+  contacted: ["replied", "screening", "screened_out", "do_not_contact"],
+  replied: ["screening", "trial", "screened_out", "do_not_contact"],
+  screening: ["trial", "contracting", "screened_out", "do_not_contact"],
+  trial: ["contracting", "onboarded", "screened_out", "do_not_contact"],
+  contracting: ["onboarded", "active", "screened_out", "do_not_contact"],
   onboarded: ["active", "do_not_contact"],
   active: ["do_not_contact"],
+  screened_out: ["verified", "do_not_contact"],
   do_not_contact: [],
 };
 

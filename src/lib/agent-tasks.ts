@@ -6,6 +6,7 @@ export const AGENT_INTENTS = [
   "internal_match",
   "analyze_supply_gap",
   "external_research",
+  "enrich_candidate_evidence",
   "rank_supply",
   "recruitment_retrospective",
 ] as const;
@@ -31,6 +32,7 @@ export type AgentStepKey =
   | "analyze_supply_gap"
   | "confirm_external_search"
   | "external_research"
+  | "enrich_candidate_evidence"
   | "search_candidates"
   | "rank_supply"
   | "generate_marketing"
@@ -74,14 +76,19 @@ const stepDefinitions: Record<AgentStepKey, AgentTaskStepDefinition> = {
   },
   confirm_external_search: {
     key: "confirm_external_search",
-    label: "确认调用外部搜索",
-    description: "外部搜索会优先复用已保存结果；未保存的查询需要确认后执行。",
+    label: "确认公开搜索计划",
+    description: "先查看搜索方向、缓存命中和写入范围；优先复用已保存结果，确认后才开始公开搜索。",
     requiresConfirmation: true,
   },
   external_research: {
     key: "external_research",
     label: "补充公开候选",
     description: "按缺口从公开来源发现候选，并保存证据和来源记录。",
+  },
+  enrich_candidate_evidence: {
+    key: "enrich_candidate_evidence",
+    label: "补齐候选证据",
+    description: "针对已有高证据候选补查机构主页等缺失来源，并生成同人合并建议。",
   },
   search_candidates: {
     key: "search_candidates",
@@ -165,6 +172,12 @@ export const agentTaskTemplates: Record<AgentIntent, AgentTaskTemplate> = {
     label: "补充公开候选",
     objective: "围绕供给缺口执行公开来源深搜，补充候选和证据。",
     steps: steps(["check_project", "confirm_external_search", "external_research", "quality_report"]),
+  },
+  enrich_candidate_evidence: {
+    intent: "enrich_candidate_evidence",
+    label: "补齐候选证据",
+    objective: "围绕已有候选补查机构主页等缺失证据，并将同人关系交给人工确认。",
+    steps: steps(["check_project", "confirm_external_search", "enrich_candidate_evidence", "quality_report"]),
   },
   rank_supply: {
     intent: "rank_supply",

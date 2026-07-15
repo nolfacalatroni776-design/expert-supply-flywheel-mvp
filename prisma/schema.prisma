@@ -8,34 +8,34 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
 model Project {
-  id                String             @id @default(cuid())
-  title             String
-  rawDemand         String
-  domain            String?
-  taskType          String?
-  quantity          Int?
-  budgetMin         Float?
-  budgetMax         Float?
-  languagesJson     String             @default("[]")
-  regionsJson       String             @default("[]")
-  riskLevel         String             @default("medium")
-  status            String             @default("draft")
-  personaJson       String             @default("{}")
-  searchQueriesJson String             @default("[]")
-  supplyGoalJson      String           @default("{}")
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-  candidates        ProjectCandidate[]
-  searchResults     SearchResult[]
-  evidenceItems     EvidenceItem[]
-  auditEvents       AuditEvent[]
-  marketingCampaigns MarketingCampaign[]
-  marketingPosts    MarketingPost[]
+  id                     String                  @id @default(cuid())
+  title                  String
+  rawDemand              String
+  domain                 String?
+  taskType               String?
+  quantity               Int?
+  budgetMin              Float?
+  budgetMax              Float?
+  languagesJson          String                  @default("[]")
+  regionsJson            String                  @default("[]")
+  riskLevel              String                  @default("medium")
+  status                 String                  @default("draft")
+  personaJson            String                  @default("{}")
+  searchQueriesJson      String                  @default("[]")
+  supplyGoalJson         String                  @default("{}")
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  candidates             ProjectCandidate[]
+  searchResults          SearchResult[]
+  evidenceItems          EvidenceItem[]
+  auditEvents            AuditEvent[]
+  marketingCampaigns     MarketingCampaign[]
+  marketingPosts         MarketingPost[]
   expertEngagementEvents ExpertEngagementEvent[]
   expertQualityMetrics   ExpertQualityMetric[]
   supplySearchRuns       SupplySearchRun[]
@@ -46,61 +46,63 @@ model Project {
 }
 
 model Expert {
-  id              String             @id @default(cuid())
-  name            String
-  title           String?
-  affiliation     String?
-  domainTagsJson  String             @default("[]")
-  languagesJson   String             @default("[]")
-  region          String?
-  contactJson     String             @default("{}")
-  sourceUrl       String?
-  evidenceLevel   String             @default("E0")
-  consentState    String             @default("unknown")
-  riskFlagsJson   String             @default("[]")
-  expertType      String             @default("external")
-  lastActiveAt    DateTime?
-  qualitySummaryJson String          @default("{}")
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
-  candidates      ProjectCandidate[]
-  evidenceItems   EvidenceItem[]
-  signals         ExpertSignal[]
-  engagementEvents ExpertEngagementEvent[]
-  qualityMetrics  ExpertQualityMetric[]
-  primaryMergeCandidates ExpertMergeCandidate[] @relation("PrimaryExpert")
-  duplicateMergeCandidates ExpertMergeCandidate[] @relation("DuplicateExpert")
+  id                       String                  @id @default(cuid())
+  name                     String
+  title                    String?
+  affiliation              String?
+  domainTagsJson           String                  @default("[]")
+  languagesJson            String                  @default("[]")
+  region                   String?
+  contactJson              String                  @default("{}")
+  identityKey              String                  @unique @default(cuid())
+  sourceUrl                String?
+  evidenceLevel            String                  @default("E0")
+  consentState             String                  @default("unknown")
+  riskFlagsJson            String                  @default("[]")
+  expertType               String                  @default("external")
+  lastActiveAt             DateTime?
+  qualitySummaryJson       String                  @default("{}")
+  createdAt                DateTime                @default(now())
+  updatedAt                DateTime                @updatedAt
+  candidates               ProjectCandidate[]
+  evidenceItems            EvidenceItem[]
+  signals                  ExpertSignal[]
+  engagementEvents         ExpertEngagementEvent[]
+  qualityMetrics           ExpertQualityMetric[]
+  primaryMergeCandidates   ExpertMergeCandidate[]  @relation("PrimaryExpert")
+  duplicateMergeCandidates ExpertMergeCandidate[]  @relation("DuplicateExpert")
 
   @@index([name])
   @@index([expertType])
   @@index([lastActiveAt])
-  @@unique([sourceUrl])
+  @@index([sourceUrl])
 }
 
 model ProjectCandidate {
-  id                String          @id @default(cuid())
-  projectId         String
-  expertId          String
-  stage             String          @default("sourced")
-  fitScore          Int?
-  scoringJson       String          @default("{}")
-  risksJson         String          @default("[]")
-  missingJson       String          @default("[]")
-  nextAction        String?
-  humanReviewNeeded Boolean         @default(true)
-  sourceType        String          @default("external")
-  sourceRunId       String?
+  id                    String                  @id @default(cuid())
+  projectId             String
+  expertId              String
+  stage                 String                  @default("sourced")
+  fitScore              Int?
+  scoringJson           String                  @default("{}")
+  risksJson             String                  @default("[]")
+  missingJson           String                  @default("[]")
+  nextAction            String?
+  humanReviewNeeded     Boolean                 @default(true)
+  sourceType            String                  @default("external")
+  sourceRunId           String?
   conversionProbability Float?
-  rankReasonJson    String          @default("{}")
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
-  project           Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  expert            Expert          @relation(fields: [expertId], references: [id], onDelete: Cascade)
-  sourceRun         SupplySearchRun? @relation(fields: [sourceRunId], references: [id], onDelete: SetNull)
-  evidenceItems     EvidenceItem[]
-  outreachDrafts    OutreachDraft[]
-  trialTasks        TrialTask[]
-  engagementEvents  ExpertEngagementEvent[]
+  rankReasonJson        String                  @default("{}")
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  project               Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  expert                Expert                  @relation(fields: [expertId], references: [id], onDelete: Cascade)
+  sourceRun             SupplySearchRun?        @relation(fields: [sourceRunId], references: [id], onDelete: SetNull)
+  evidenceItems         EvidenceItem[]
+  outreachDrafts        OutreachDraft[]
+  trialTasks            TrialTask[]
+  engagementEvents      ExpertEngagementEvent[]
+  discoveries           CandidateDiscovery[]
 
   @@unique([projectId, expertId])
   @@index([stage])
@@ -109,24 +111,25 @@ model ProjectCandidate {
 }
 
 model SearchResult {
-  id        String   @id @default(cuid())
-  projectId String
+  id          String           @id @default(cuid())
+  projectId   String
   searchRunId String?
-  query     String
-  title     String
-  url       String
-  snippet   String
-  domain    String?
-  position  Int?
-  sourceType String @default("public_web")
-  createdAt DateTime @default(now())
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  searchRun SupplySearchRun? @relation(fields: [searchRunId], references: [id], onDelete: SetNull)
+  query       String
+  title       String
+  url         String
+  snippet     String
+  domain      String?
+  position    Int?
+  sourceType  String           @default("public_web")
+  createdAt   DateTime         @default(now())
+  project     Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  searchRun   SupplySearchRun? @relation(fields: [searchRunId], references: [id], onDelete: SetNull)
+  occurrences SearchResultOccurrence[]
 
+  @@unique([projectId, url])
   @@index([projectId])
   @@index([searchRunId])
   @@index([url])
-  @@unique([projectId, url])
 }
 
 model SearchCache {
@@ -142,21 +145,21 @@ model SearchCache {
 }
 
 model EvidenceItem {
-  id              String            @id @default(cuid())
-  projectId       String?
-  expertId        String
-  candidateId     String?
-  claim           String
-  sourceUrl       String
-  sourceTitle     String?
-  sourceType      String            @default("public_web")
-  snippet         String
-  evidenceLevel   String            @default("E1")
-  confidence      Float             @default(0.5)
-  createdAt       DateTime          @default(now())
-  project         Project?          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  expert          Expert            @relation(fields: [expertId], references: [id], onDelete: Cascade)
-  candidate       ProjectCandidate? @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  id            String            @id @default(cuid())
+  projectId     String?
+  expertId      String
+  candidateId   String?
+  claim         String
+  sourceUrl     String
+  sourceTitle   String?
+  sourceType    String            @default("public_web")
+  snippet       String
+  evidenceLevel String            @default("E1")
+  confidence    Float             @default(0.5)
+  createdAt     DateTime          @default(now())
+  project       Project?          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  expert        Expert            @relation(fields: [expertId], references: [id], onDelete: Cascade)
+  candidate     ProjectCandidate? @relation(fields: [candidateId], references: [id], onDelete: Cascade)
 
   @@index([expertId])
   @@index([candidateId])
@@ -164,32 +167,32 @@ model EvidenceItem {
 }
 
 model OutreachDraft {
-  id          String           @id @default(cuid())
-  candidateId String
-  channel     String           @default("email")
-  subject     String
-  body        String
-  replyTemplatesJson String   @default("{}")
-  status      String           @default("draft")
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
-  candidate   ProjectCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  id                 String           @id @default(cuid())
+  candidateId        String
+  channel            String           @default("email")
+  subject            String
+  body               String
+  replyTemplatesJson String           @default("{}")
+  status             String           @default("draft")
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  candidate          ProjectCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
 
   @@index([candidateId])
   @@index([status])
 }
 
 model TrialTask {
-  id            String           @id @default(cuid())
-  candidateId   String
-  instructions  String
-  rubricJson    String           @default("{}")
-  score         Float?
-  outcome       String?
-  notes         String?
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
-  candidate     ProjectCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  id           String           @id @default(cuid())
+  candidateId  String
+  instructions String
+  rubricJson   String           @default("{}")
+  score        Float?
+  outcome      String?
+  notes        String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  candidate    ProjectCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
 
   @@index([candidateId])
   @@index([outcome])
@@ -201,8 +204,8 @@ model ExpertSignal {
   type          String
   value         String
   source        String
-  evidenceLevel String  @default("E1")
-  confidence    Float   @default(0.5)
+  evidenceLevel String   @default("E1")
+  confidence    Float    @default(0.5)
   sourceUrl     String?
   createdAt     DateTime @default(now())
   expert        Expert   @relation(fields: [expertId], references: [id], onDelete: Cascade)
@@ -213,16 +216,16 @@ model ExpertSignal {
 }
 
 model ExpertEngagementEvent {
-  id          String   @id @default(cuid())
+  id          String            @id @default(cuid())
   expertId    String
   projectId   String?
   candidateId String?
   eventType   String
   channel     String?
-  payloadJson String   @default("{}")
-  createdAt   DateTime @default(now())
-  expert      Expert   @relation(fields: [expertId], references: [id], onDelete: Cascade)
-  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  payloadJson String            @default("{}")
+  createdAt   DateTime          @default(now())
+  expert      Expert            @relation(fields: [expertId], references: [id], onDelete: Cascade)
+  project     Project?          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   candidate   ProjectCandidate? @relation(fields: [candidateId], references: [id], onDelete: SetNull)
 
   @@index([expertId])
@@ -249,27 +252,61 @@ model ExpertQualityMetric {
 }
 
 model SupplySearchRun {
-  id          String   @id @default(cuid())
-  projectId   String
-  runType     String
-  status      String   @default("completed")
-  goalJson    String   @default("{}")
-  queriesJson String   @default("[]")
-  summaryJson String   @default("{}")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  candidates  ProjectCandidate[]
-  searchResults SearchResult[]
-  sourceMetrics SearchSourceMetric[]
+  id                   String               @id @default(cuid())
+  projectId            String
+  runType              String
+  status               String               @default("completed")
+  goalJson             String               @default("{}")
+  queriesJson          String               @default("[]")
+  summaryJson          String               @default("{}")
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  project              Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  candidates           ProjectCandidate[]
+  searchResults        SearchResult[]
+  sourceMetrics        SearchSourceMetric[]
+  candidateDiscoveries CandidateDiscovery[]
+  resultOccurrences    SearchResultOccurrence[]
 
   @@index([projectId])
   @@index([runType])
   @@index([status])
 }
 
+model CandidateDiscovery {
+  id            String           @id @default(cuid())
+  searchRunId   String
+  candidateId   String
+  sourceUrl     String?
+  evidenceLevel String?
+  createdAt     DateTime         @default(now())
+  searchRun     SupplySearchRun  @relation(fields: [searchRunId], references: [id], onDelete: Cascade)
+  candidate     ProjectCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@unique([searchRunId, candidateId])
+  @@index([searchRunId])
+  @@index([candidateId])
+}
+
+model SearchResultOccurrence {
+  id             String          @id @default(cuid())
+  searchRunId    String
+  searchResultId String
+  query          String
+  provider       String
+  position       Int?
+  createdAt      DateTime        @default(now())
+  searchRun      SupplySearchRun @relation(fields: [searchRunId], references: [id], onDelete: Cascade)
+  searchResult   SearchResult    @relation(fields: [searchResultId], references: [id], onDelete: Cascade)
+
+  @@unique([searchRunId, searchResultId, query])
+  @@index([searchRunId])
+  @@index([searchResultId])
+  @@index([provider])
+}
+
 model SupplyGap {
-  id               String   @id @default(cuid())
+  id                String   @id @default(cuid())
   projectId         String
   gapType           String
   description       String
@@ -288,21 +325,21 @@ model SupplyGap {
 }
 
 model SearchSourceMetric {
-  id             String   @id @default(cuid())
-  projectId       String
-  searchRunId     String?
-  query           String
-  domain          String?
-  resultCount     Int     @default(0)
-  candidateCount  Int     @default(0)
-  e2PlusCount     Int     @default(0)
-  approvedCount   Int     @default(0)
-  trialCount      Int     @default(0)
-  onboardedCount  Int     @default(0)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  searchRun       SupplySearchRun? @relation(fields: [searchRunId], references: [id], onDelete: SetNull)
+  id             String           @id @default(cuid())
+  projectId      String
+  searchRunId    String?
+  query          String
+  domain         String?
+  resultCount    Int              @default(0)
+  candidateCount Int              @default(0)
+  e2PlusCount    Int              @default(0)
+  approvedCount  Int              @default(0)
+  trialCount     Int              @default(0)
+  onboardedCount Int              @default(0)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  project        Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  searchRun      SupplySearchRun? @relation(fields: [searchRunId], references: [id], onDelete: SetNull)
 
   @@index([projectId])
   @@index([searchRunId])
@@ -327,55 +364,55 @@ model ExpertMergeCandidate {
 
 model RecruitmentOutcome {
   id             String   @id @default(cuid())
-  projectId       String
-  targetCount     Int     @default(0)
-  sourcedCount    Int     @default(0)
-  approvedCount   Int     @default(0)
-  contactedCount  Int     @default(0)
-  trialCount      Int     @default(0)
-  onboardedCount  Int     @default(0)
-  summaryJson     String  @default("{}")
-  createdAt       DateTime @default(now())
-  project         Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId      String
+  targetCount    Int      @default(0)
+  sourcedCount   Int      @default(0)
+  approvedCount  Int      @default(0)
+  contactedCount Int      @default(0)
+  trialCount     Int      @default(0)
+  onboardedCount Int      @default(0)
+  summaryJson    String   @default("{}")
+  createdAt      DateTime @default(now())
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([projectId])
   @@index([createdAt])
 }
 
 model MarketingCampaign {
-  id            String          @id @default(cuid())
-  projectId     String
-  objective     String          @default("recruit_experts")
-  audienceJson  String          @default("[]")
-  channelsJson  String          @default("[]")
-  messageBrief  String
-  status        String          @default("draft")
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
-  project       Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  posts         MarketingPost[]
+  id           String          @id @default(cuid())
+  projectId    String
+  objective    String          @default("recruit_experts")
+  audienceJson String          @default("[]")
+  channelsJson String          @default("[]")
+  messageBrief String
+  status       String          @default("draft")
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  project      Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  posts        MarketingPost[]
 
   @@index([projectId])
   @@index([status])
 }
 
 model MarketingPost {
-  id           String            @id @default(cuid())
-  campaignId   String
-  projectId    String
-  channel      String
-  title        String
-  body         String
-  cta          String
-  hashtagsJson String            @default("[]")
-  riskNotesJson String           @default("[]")
-  status       String            @default("draft")
-  scheduledFor DateTime?
-  publishedAt  DateTime?
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
-  campaign     MarketingCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  project      Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id            String            @id @default(cuid())
+  campaignId    String
+  projectId     String
+  channel       String
+  title         String
+  body          String
+  cta           String
+  hashtagsJson  String            @default("[]")
+  riskNotesJson String            @default("[]")
+  status        String            @default("draft")
+  scheduledFor  DateTime?
+  publishedAt   DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  campaign      MarketingCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  project       Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([projectId])
   @@index([campaignId])
@@ -384,14 +421,14 @@ model MarketingPost {
 }
 
 model AuditEvent {
-  id         String   @id @default(cuid())
-  projectId  String?
-  entityType String
-  entityId   String
-  action     String
-  payloadJson String  @default("{}")
-  createdAt  DateTime @default(now())
-  project    Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id          String   @id @default(cuid())
+  projectId   String?
+  entityType  String
+  entityId    String
+  action      String
+  payloadJson String   @default("{}")
+  createdAt   DateTime @default(now())
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([entityType, entityId])
   @@index([action])
@@ -407,40 +444,81 @@ model AgentTaskRun {
   contextSnapshotJson String          @default("{}")
   reportJson          String          @default("{}")
   errorMessage        String?
+  workflowRunId       String?         @unique
+  executionToken      String?
+  leaseExpiresAt      DateTime?
+  heartbeatAt         DateTime?
+  attempt             Int             @default(0)
   createdAt           DateTime        @default(now())
   updatedAt           DateTime        @updatedAt
   startedAt           DateTime?
   completedAt         DateTime?
   project             Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   steps               AgentTaskStep[]
+  toolReceipts        AgentToolReceipt[]
 
   @@index([projectId])
   @@index([intent])
   @@index([status])
+  @@index([status, leaseExpiresAt])
   @@index([createdAt])
 }
 
 model AgentTaskStep {
-  id                  String       @id @default(cuid())
-  runId               String
-  stepKey             String
-  label               String
-  status              String       @default("pending")
-  order               Int
-  requiresConfirmation Boolean     @default(false)
-  confirmedAt         DateTime?
-  inputJson           String       @default("{}")
-  outputJson          String       @default("{}")
-  checksJson          String       @default("{}")
-  errorMessage        String?
-  startedAt           DateTime?
-  completedAt         DateTime?
-  createdAt           DateTime     @default(now())
-  updatedAt           DateTime     @updatedAt
-  run                 AgentTaskRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  id                   String       @id @default(cuid())
+  runId                String
+  stepKey              String
+  label                String
+  status               String       @default("pending")
+  order                Int
+  requiresConfirmation Boolean      @default(false)
+  confirmedAt          DateTime?
+  confirmationDecision String?
+  confirmationReason   String?
+  decidedAt            DateTime?
+  inputJson            String       @default("{}")
+  outputJson           String       @default("{}")
+  checksJson           String       @default("{}")
+  errorMessage         String?
+  attempt              Int          @default(0)
+  startedAt            DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+  run                  AgentTaskRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  toolReceipts         AgentToolReceipt[]
 
   @@unique([runId, stepKey])
   @@index([runId])
   @@index([status])
   @@index([stepKey])
+}
+
+model AgentToolReceipt {
+  id                 String        @id @default(cuid())
+  runId              String
+  stepId             String
+  toolCallId         String        @unique
+  toolName           String
+  argumentDigest     String
+  approvalId         String?
+  idempotencyClass   String
+  status             String        @default("planned")
+  provider           String?
+  attempt            Int           @default(0)
+  durationMs         Int?
+  resultSummaryJson  String        @default("{}")
+  errorCategory      String?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  run                AgentTaskRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  step               AgentTaskStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([stepId])
+  @@index([status])
+  @@index([approvalId])
+  @@index([provider])
 }

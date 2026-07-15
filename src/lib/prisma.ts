@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { installRuntimeDatabaseUrl } from "@/lib/database-url";
 import { ensureRuntimeDatabase, ensureSqliteDirectoryFromEnv } from "@/lib/runtime-db";
 
 const globalForPrisma = globalThis as unknown as {
@@ -6,6 +7,7 @@ const globalForPrisma = globalThis as unknown as {
   rawPrisma?: PrismaClient;
 };
 
+installRuntimeDatabaseUrl();
 ensureSqliteDirectoryFromEnv();
 
 const rawPrisma =

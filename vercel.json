@@ -1,0 +1,3 @@
+{
+  "buildCommand": "DATABASE_URL=\"${product_POSTGRES_PRISMA_URL:-${POSTGRES_PRISMA_URL:-${product_DATABASE_URL:-$DATABASE_URL}}}\" npx prisma migrate deploy && npx prisma generate && npx next build"
+}

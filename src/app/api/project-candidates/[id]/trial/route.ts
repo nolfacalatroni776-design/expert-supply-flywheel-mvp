@@ -1,17 +1,25 @@
 import { apiError, apiOk, handleRouteError } from "@/lib/http";
 import { stringifyJson } from "@/lib/json";
 import { prisma } from "@/lib/prisma";
-import { serializeCandidate, serializeProject } from "@/lib/serializers";
+import { serializeCandidateForGeneration, serializeProjectForGeneration } from "@/lib/serializers";
 import { writeAuditEvent } from "@/lib/audit";
 import { designTrialTask } from "@/lib/workflows";
 import { canTransitionCandidateStage } from "@/lib/state-machines";
+import { buildFallbackTrialTask } from "@/lib/fallback-drafts";
+import { buildTrialPreparationStatus } from "@/lib/trial-readiness";
 
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
     const candidate = await prisma.projectCandidate.findUnique({
       where: { id },
-      include: { project: true, expert: true, evidenceItems: true, outreachDrafts: true, trialTasks: true },
+      include: {
+        project: true,
+        expert: { include: { signals: true, qualityMetrics: true, evidenceItems: true } },
+        evidenceItems: true,
+        outreachDrafts: true,
+        trialTasks: true,
+      },
     });
     if (!candidate) return apiError("Candidate not found.", 404);
 
@@ -28,32 +36,40 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     }
 
     const result = await designTrialTask({
-      project: serializeProject(candidate.project),
-      candidate: serializeCandidate(candidate),
+      project: serializeProjectForGeneration(candidate.project),
+      candidate: serializeCandidateForGeneration(candidate),
     });
+
+    const trialDraft = result.ok
+      ? result.data
+      : buildFallbackTrialTask({
+          project: serializeProjectForGeneration(candidate.project),
+          candidate: serializeCandidateForGeneration(candidate),
+        });
 
     if (!result.ok) {
       await writeAuditEvent({
         projectId: candidate.projectId,
         entityType: "candidate",
         entityId: candidate.id,
-        action: "ai.trial.failed",
-        payload: { error: result.error },
+        action: "ai.trial.fallback",
+        payload: { error: result.error, fallback: "system_template" },
       });
-      return apiError(result.error, result.error.includes("DASHSCOPE_API_KEY") ? 412 : 502);
     }
 
+    const existingTrial = candidate.trialTasks.find((trial) => trial.score === null && trial.outcome === null);
+    const readiness = buildTrialPreparationStatus();
+    const trialData = {
+      instructions: trialDraft.instructions,
+      rubricJson: stringifyJson({ ...trialDraft.rubric, preparation: readiness }),
+    };
     const [trial, updatedCandidate] = await prisma.$transaction([
-      prisma.trialTask.create({
-        data: {
-          candidateId: candidate.id,
-          instructions: result.data.instructions,
-          rubricJson: stringifyJson(result.data.rubric),
-        },
-      }),
+      existingTrial
+        ? prisma.trialTask.update({ where: { id: existingTrial.id }, data: trialData })
+        : prisma.trialTask.create({ data: { candidateId: candidate.id, ...trialData } }),
       prisma.projectCandidate.update({
         where: { id: candidate.id },
-        data: { stage: "trial", humanReviewNeeded: true },
+        data: { humanReviewNeeded: true, nextAction: readiness.nextAction },
       }),
     ]);
 
@@ -61,8 +77,8 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       projectId: candidate.projectId,
       entityType: "candidate",
       entityId: candidate.id,
-      action: "candidate.stage.updated",
-      payload: { from: candidate.stage, to: "trial", reason: "trial_task_created" },
+      action: "trial.draft.created",
+      payload: { stage: candidate.stage, trialId: trial.id, readiness },
     });
 
     await writeAuditEvent({
@@ -70,10 +86,22 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       entityType: "candidate",
       entityId: candidate.id,
       action: "ai.trial.completed",
-      payload: { trialId: trial.id, usage: result.usage },
+      payload: {
+        trialId: trial.id,
+        usage: result.ok ? result.usage : null,
+        fallback: !result.ok,
+        usedDefaultRubric: result.ok ? result.data.usedDefaultRubric : true,
+        reusedTrial: Boolean(existingTrial),
+      },
     });
 
-    return apiOk({ trialTask: trial, candidate: updatedCandidate });
+    return apiOk({
+      trialTask: trial,
+      candidate: updatedCandidate,
+      fallback: !result.ok,
+      usedDefaultRubric: result.ok ? result.data.usedDefaultRubric : true,
+      readiness,
+    });
   } catch (error) {
     return handleRouteError(error);
   }

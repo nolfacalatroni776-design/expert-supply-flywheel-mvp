@@ -7,14 +7,27 @@ import {
   DncForm,
   DraftStatusButton,
   TrialResultForm,
+  TrialStartForm,
 } from "@/components/candidate-action-forms";
 import { CreateProjectForm, QuickProjectStartForm } from "@/components/create-project-form";
 import { DynamicLogo } from "@/components/dynamic-logo";
 import { ExpertQualityEventForm } from "@/components/supply-action-forms";
+import type { ExternalResearchAcceptanceReport } from "@/lib/external-research-acceptance";
+import { groupEvidenceBySource } from "@/lib/candidate-evidence";
+import {
+  filterCandidatePipeline,
+  isCandidateEligibleForSupplyMetrics,
+  isHighEvidenceCandidate,
+  needsCandidateReview,
+} from "@/lib/candidate-status";
+import { serializeAgentRun } from "@/lib/agent-runtime";
 import { canApproveForOutreach } from "@/lib/gates";
 import { parseJson } from "@/lib/json";
+import { evaluateMarketingAttractionReadiness, type MarketingAttractionReport } from "@/lib/marketing-attraction";
 import {
   formatViewName,
+  filterCandidatesBySourceRun,
+  getCandidatePipelineHref,
   getProjectSteps,
   getWorkspaceNavItems,
   isCandidateFilter,
@@ -25,8 +38,10 @@ import {
   type CanonicalView,
   type MarketingPostStatusFilter,
 } from "@/lib/navigation";
+import { resolveReviewMetric } from "@/lib/workspace-metrics";
 import { prisma } from "@/lib/prisma";
 import { publicErrorMessage } from "@/lib/redaction";
+import { formatOutreachDraftStatus } from "@/lib/outreach-status";
 import { serializeProject } from "@/lib/serializers";
 import { canTransitionCandidateStage } from "@/lib/state-machines";
 import Link from "next/link";
@@ -57,7 +72,7 @@ import type { Prisma } from "@prisma/client";
 export const dynamic = "force-dynamic";
 
 type PageProps = {
-  searchParams: Promise<{ project?: string; candidate?: string; view?: string; post?: string; candidateFilter?: string; channel?: string; postStatus?: string }>;
+  searchParams: Promise<{ project?: string; candidate?: string; view?: string; post?: string; candidateFilter?: string; sourceRun?: string; channel?: string; postStatus?: string }>;
 };
 
 type ProjectWorkspaceData = Prisma.ProjectGetPayload<{
@@ -119,7 +134,13 @@ export default async function Home({ searchParams }: PageProps) {
           where: { id: params.project },
           include: {
             candidates: {
-              include: { expert: { include: { signals: true, qualityMetrics: true, engagementEvents: true } }, evidenceItems: true, outreachDrafts: true, trialTasks: true },
+              include: {
+                expert: { include: { signals: true, qualityMetrics: true, engagementEvents: true } },
+                evidenceItems: true,
+                outreachDrafts: true,
+                trialTasks: true,
+                discoveries: true,
+              },
               orderBy: [{ fitScore: "desc" }, { updatedAt: "desc" }],
             },
             searchResults: { orderBy: { createdAt: "desc" }, take: 12 },
@@ -133,7 +154,7 @@ export default async function Home({ searchParams }: PageProps) {
             agentTaskRuns: {
               include: { steps: { orderBy: { order: "asc" } } },
               orderBy: { createdAt: "desc" },
-              take: 3,
+              take: 8,
             },
           },
         })
@@ -143,12 +164,15 @@ export default async function Home({ searchParams }: PageProps) {
   const requestedView = normalizeView(params.view);
   const selectedView = activeProject && (!params.view || isProjectView(requestedView)) ? (isProjectView(requestedView) ? requestedView : "demand") : requestedView;
   const candidateFilter = isCandidateFilter(params.candidateFilter) ? params.candidateFilter : "all";
+  const candidateSourceRunId = params.sourceRun?.trim() || null;
   const selectedProjectCandidates = selectedProject?.candidates ?? [];
-  const selectedProjectFilteredCandidates = filterCandidates(selectedProjectCandidates, candidateFilter);
-  const selectedCandidate =
-    selectedProject?.candidates.find((candidate) => candidate.id === params.candidate) ??
-    (selectedView === "pipeline" && params.candidate ? selectedProjectFilteredCandidates[0] : null) ??
-    null;
+  const selectedProjectFilteredCandidates = filterCandidatePipeline(
+    filterCandidatesBySourceRun(selectedProjectCandidates, candidateSourceRunId),
+    candidateFilter,
+  );
+  const selectedCandidate = params.candidate
+    ? selectedProjectFilteredCandidates.find((candidate) => candidate.id === params.candidate) ?? null
+    : null;
   const selectedPostId = params.post ?? null;
   const selectedChannelFilter = params.channel ?? "all";
   const selectedPostStatusFilter = isMarketingPostStatusFilter(params.postStatus) ? params.postStatus : "all";
@@ -175,11 +199,16 @@ export default async function Home({ searchParams }: PageProps) {
   const reviewCandidates = await prisma.projectCandidate.findMany({
     where: {
       ...(selectedProject ? { projectId: selectedProject.id } : {}),
-      OR: [
-        { humanReviewNeeded: true },
-        { stage: "approved_for_outreach" },
-        { stage: "do_not_contact" },
-        { expert: { evidenceLevel: { in: ["E0", "E1"] } } },
+      AND: [
+        { stage: { not: "screened_out" } },
+        {
+          OR: [
+            { humanReviewNeeded: true },
+            { stage: "approved_for_outreach" },
+            { stage: "do_not_contact" },
+            { expert: { evidenceLevel: { in: ["E0", "E1"] } } },
+          ],
+        },
       ],
     },
     include: { project: true, expert: true, evidenceItems: true, outreachDrafts: true, trialTasks: true },
@@ -209,17 +238,25 @@ export default async function Home({ searchParams }: PageProps) {
   const stats = {
     projects: projects.length,
     candidates: currentCandidates.length,
-    review: currentReviewCandidateCount + currentReviewMarketingPostCount,
+    review: resolveReviewMetric({
+      candidateReviews: currentReviewCandidateCount,
+      marketingReviews: currentReviewMarketingPostCount,
+      scope: selectedProject && isProjectView(selectedView) ? "project_candidates" : "all_reviews",
+    }),
     outreachReady: selectedProject
       ? countOutreachReady(selectedProject)
       : currentCandidates.filter((candidate) => candidate.stage === "approved_for_outreach").length,
     trial: currentCandidates.filter((candidate) => candidate.stage === "trial").length,
     active: currentCandidates.filter((candidate) => ["onboarded", "active"].includes(candidate.stage)).length,
-    internal: currentCandidates.filter((candidate) => candidate.sourceType === "internal").length,
-    highEvidence: currentCandidates.filter((candidate) => (evidenceRankForUi(candidate.expert.evidenceLevel) >= 2)).length,
+    internal: currentCandidates.filter(
+      (candidate) => candidate.sourceType === "internal" && isCandidateEligibleForSupplyMetrics(candidate),
+    ).length,
+    highEvidence: currentCandidates.filter(isHighEvidenceCandidate).length,
     experts: expertCount,
     marketingPosts: selectedProject?.marketingPosts.length ?? (await prisma.marketingPost.count()),
   };
+  const databaseUrl = process.env.DATABASE_URL ?? "";
+  const isTemporaryTrialRuntime = process.env.ENABLE_RUNTIME_DB_INIT === "1" && /^file:\/{1,3}tmp\//.test(databaseUrl);
 
   return (
     <main className="h-screen overflow-hidden bg-[#f7f7f4] text-[#28251e]">
@@ -299,6 +336,7 @@ export default async function Home({ searchParams }: PageProps) {
               </div>
               <Badge>{stats.projects} 项目</Badge>
             </div>
+            {isTemporaryTrialRuntime ? <TrialWorkspaceNotice /> : null}
             {isProjectView(selectedView) ? (
               <MobileProjectSwitcher projects={projects} selectedProject={selectedProject} selectedView={selectedView} />
             ) : null}
@@ -311,6 +349,7 @@ export default async function Home({ searchParams }: PageProps) {
                 selectedView={selectedView}
                 selectedPostId={selectedPostId}
                 candidateFilter={candidateFilter}
+                candidateSourceRunId={candidateSourceRunId}
                 mergeSuggestions={mergeSuggestions}
                 selectedChannel={selectedChannelFilter}
                 selectedStatus={selectedPostStatusFilter}
@@ -364,6 +403,14 @@ function SidebarNav({ selectedView }: { selectedView: CanonicalView }) {
         </Link>
       ))}
     </nav>
+  );
+}
+
+function TrialWorkspaceNotice() {
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+      当前为试用工作区，数据可能会重置。重要项目请使用正式工作区；若项目打不开，请返回项目库重新进入。
+    </div>
   );
 }
 
@@ -619,8 +666,8 @@ function ProjectSelectionGate({
 
       <div className="grid gap-3">
         {projects.map((project) => {
-          const reviewCount = project.candidates.filter((candidate) => candidate.humanReviewNeeded || candidate.stage === "do_not_contact" || evidenceRankForUi(candidate.expert.evidenceLevel) < 2).length;
-          const highEvidenceCount = project.candidates.filter((candidate) => evidenceRankForUi(candidate.expert.evidenceLevel) >= 2).length;
+          const reviewCount = project.candidates.filter(needsCandidateReview).length;
+          const highEvidenceCount = project.candidates.filter(isHighEvidenceCandidate).length;
           const activeCount = project.candidates.filter((candidate) => ["onboarded", "active"].includes(candidate.stage)).length;
           return (
             <Link
@@ -659,6 +706,7 @@ function ProjectWorkspace({
   selectedView,
   selectedPostId,
   candidateFilter,
+  candidateSourceRunId,
   mergeSuggestions,
   selectedChannel,
   selectedStatus,
@@ -674,6 +722,7 @@ function ProjectWorkspace({
   selectedView: CanonicalView;
   selectedPostId: string | null;
   candidateFilter: CandidateFilter;
+  candidateSourceRunId: string | null;
   mergeSuggestions: MergeSuggestionData[];
   selectedChannel: string;
   selectedStatus: MarketingPostStatusFilter;
@@ -726,7 +775,12 @@ function ProjectWorkspace({
         ) : selectedView === "supply" ? (
           <SupplyDiscoveryModule project={project} mergeSuggestions={mergeSuggestions} />
         ) : selectedView === "pipeline" ? (
-          <SourcingModule project={project} selectedCandidateId={selectedCandidate?.id} candidateFilter={candidateFilter} />
+          <SourcingModule
+            project={project}
+            selectedCandidateId={selectedCandidate?.id}
+            candidateFilter={candidateFilter}
+            candidateSourceRunId={candidateSourceRunId}
+          />
         ) : selectedView === "growth" ? (
           <GrowthAndRetrospectiveModule project={project} selectedPostId={selectedPostId} selectedChannel={selectedChannel} selectedStatus={selectedStatus} />
         ) : (
@@ -757,7 +811,9 @@ function ProjectPrimaryAction({ project, selectedView }: { project: ProjectWorks
     return <ApiButton label="召回内部专家" endpoint={`/api/projects/${project.id}/internal-match`} icon="run" variant="primary" successLabel="内部专家召回已完成。" />;
   }
   if (selectedView === "pipeline") {
-    const candidate = project.candidates.find((item) => item.fitScore === null);
+    const candidate = project.candidates.find(
+      (item) => item.fitScore === null && isCandidateEligibleForSupplyMetrics(item),
+    );
     return candidate ? (
       <ApiButton label="补评候选" endpoint={`/api/project-candidates/${candidate.id}/score`} icon="analyze" variant="primary" />
     ) : (
@@ -774,8 +830,12 @@ function ProjectPrimaryAction({ project, selectedView }: { project: ProjectWorks
 
 function RecruitmentFlowBar({ project, selectedView }: { project: ProjectWorkspaceData; selectedView: CanonicalView }) {
   const profileReady = Object.keys(parseJson<Record<string, unknown>>(project.personaJson, {})).length > 0;
-  const internalCount = project.candidates.filter((candidate) => candidate.sourceType === "internal").length;
-  const externalCount = project.candidates.filter((candidate) => candidate.sourceType === "external").length;
+  const internalCount = project.candidates.filter(
+    (candidate) => candidate.sourceType === "internal" && isCandidateEligibleForSupplyMetrics(candidate),
+  ).length;
+  const externalCount = project.candidates.filter(
+    (candidate) => candidate.sourceType === "external" && isCandidateEligibleForSupplyMetrics(candidate),
+  ).length;
   const reviewCount = project.candidates.filter(needsCandidateReview).length;
   const outreachReady = countOutreachReady(project);
   const recommended = getRecommendedProjectAction(project);
@@ -833,8 +893,10 @@ type RecommendedProjectAction =
 
 function getRecommendedProjectAction(project: ProjectWorkspaceData): RecommendedProjectAction {
   const profileReady = Object.keys(parseJson<Record<string, unknown>>(project.personaJson, {})).length > 0;
-  const internalCount = project.candidates.filter((candidate) => candidate.sourceType === "internal").length;
-  const highEvidenceCount = project.candidates.filter((candidate) => evidenceRankForUi(candidate.expert.evidenceLevel) >= 2).length;
+  const internalCount = project.candidates.filter(
+    (candidate) => candidate.sourceType === "internal" && isCandidateEligibleForSupplyMetrics(candidate),
+  ).length;
+  const highEvidenceCount = project.candidates.filter(isHighEvidenceCandidate).length;
   const reviewCount = project.candidates.filter(needsCandidateReview).length;
   const outreachReady = countOutreachReady(project);
   if (!profileReady) {
@@ -988,7 +1050,12 @@ function AgentDrawer({ project }: { project: ProjectWorkspaceData }) {
         招募助手
       </summary>
       <div className="fixed inset-x-4 top-24 z-[90] max-h-[calc(100vh-7rem)] overflow-y-auto rounded-lg border border-[#dbe4ee] bg-white p-4 shadow-[0_18px_45px_rgba(17,17,17,0.12)] sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-[min(760px,calc(100vw-2rem))]">
-        <AgentCommandForm projectId={project.id} projectTitle={project.title} />
+        <AgentCommandForm
+          projectId={project.id}
+          projectTitle={project.title}
+          initialRun={project.agentTaskRuns[0] ? serializeAgentRun(project.agentTaskRuns[0]) : null}
+          initialRuns={project.agentTaskRuns.map((run) => serializeAgentRun(run))}
+        />
       </div>
     </details>
   );
@@ -1083,10 +1150,12 @@ function WorkspaceCommandCenter({
   const rankedProjects = projects
     .map((project) => ({
       project,
-      reviewCount: project.candidates.filter((candidate) => candidate.humanReviewNeeded || evidenceRankForUi(candidate.expert.evidenceLevel) < 2).length,
+      reviewCount: project.candidates.filter(needsCandidateReview).length,
       activeCount: project.candidates.filter((candidate) => ["onboarded", "active"].includes(candidate.stage)).length,
-      highEvidenceCount: project.candidates.filter((candidate) => evidenceRankForUi(candidate.expert.evidenceLevel) >= 2).length,
-      internalCount: project.candidates.filter((candidate) => candidate.sourceType === "internal").length,
+      highEvidenceCount: project.candidates.filter(isHighEvidenceCandidate).length,
+      internalCount: project.candidates.filter(
+        (candidate) => candidate.sourceType === "internal" && isCandidateEligibleForSupplyMetrics(candidate),
+      ).length,
     }))
     .sort((a, b) => riskPriority(b.project.riskLevel) - riskPriority(a.project.riskLevel) || b.reviewCount - a.reviewCount || b.highEvidenceCount - a.highEvidenceCount)
     .slice(0, 6);
@@ -1166,9 +1235,13 @@ function WorkspaceCommandCenter({
   }
 
   const projectReviewCount = selectedProject.candidates.filter(needsCandidateReview).length;
-  const internalCount = selectedProject.candidates.filter((candidate) => candidate.sourceType === "internal").length;
-  const externalCount = selectedProject.candidates.filter((candidate) => candidate.sourceType === "external").length;
-  const highEvidenceCount = selectedProject.candidates.filter((candidate) => evidenceRankForUi(candidate.expert.evidenceLevel) >= 2).length;
+  const internalCount = selectedProject.candidates.filter(
+    (candidate) => candidate.sourceType === "internal" && isCandidateEligibleForSupplyMetrics(candidate),
+  ).length;
+  const externalCount = selectedProject.candidates.filter(
+    (candidate) => candidate.sourceType === "external" && isCandidateEligibleForSupplyMetrics(candidate),
+  ).length;
+  const highEvidenceCount = selectedProject.candidates.filter(isHighEvidenceCandidate).length;
   const outreachReady = countOutreachReady(selectedProject);
   const activeCount = selectedProject.candidates.filter((candidate) => ["onboarded", "active"].includes(candidate.stage)).length;
   const recommended = getWorkspaceProjectAction(selectedProject, { reviewCount: projectReviewCount, activeCount, highEvidenceCount, internalCount });
@@ -1201,135 +1274,39 @@ function WorkspaceCommandCenter({
         </div>
       </div>
 
-      <section className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)] 2xl:grid-cols-[280px_minmax(0,1fr)_360px]">
+      <section className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
         <div className="order-2 grid content-start gap-4 xl:order-1">
           <Panel title="当前项目">
             <div className="grid gap-2">
               <Info label="目标" value={selectedProject.quantity?.toString() ?? "-"} />
               <Info label="内部召回" value={internalCount.toString()} href={`/?project=${selectedProject.id}&view=supply`} />
-              <Info label="公开候选" value={externalCount.toString()} href={`/?project=${selectedProject.id}&view=supply`} />
+              <Info label="外部发现" value={externalCount.toString()} href={`/?project=${selectedProject.id}&view=pipeline&candidateFilter=external`} />
               <Info label="高证据" value={highEvidenceCount.toString()} href={`/?project=${selectedProject.id}&view=pipeline&candidateFilter=highEvidence`} />
               <Info label="待复核" value={projectReviewCount.toString()} href={`/?project=${selectedProject.id}&view=pipeline&candidateFilter=review`} />
               <Info label="可触达" value={outreachReady.toString()} href={`/?project=${selectedProject.id}&view=pipeline&candidateFilter=outreachReady`} />
             </div>
           </Panel>
-          <AgentFlowChecklist project={selectedProject} reviewCount={projectReviewCount} internalCount={internalCount} externalCount={externalCount} outreachReady={outreachReady} />
         </div>
 
         <section id="agent-command" className="order-1 scroll-mt-4 rounded-lg border border-[#e7e7e2] bg-white p-4 shadow-[0_1px_2px_rgba(17,17,17,0.04)] xl:order-2">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-semibold text-[#28251e]">和招募助手推进</h2>
-              <p className="mt-1 text-sm leading-6 text-[#5f5a50]">选择任务，生成计划；确认后再执行会写入数据的步骤。</p>
+              <p className="mt-1 text-sm leading-6 text-[#5f5a50]">选择下一步工作，先看计划和检查结果，再执行。</p>
             </div>
             <Badge tone={selectedProject.riskLevel === "regulated" || selectedProject.riskLevel === "high" ? "red" : "amber"}>
               {formatRiskLevel(selectedProject.riskLevel)}
             </Badge>
           </div>
-          <AgentCommandForm projectId={selectedProject.id} projectTitle={selectedProject.title} />
+          <AgentCommandForm
+            key={selectedProject.id}
+            projectId={selectedProject.id}
+            projectTitle={selectedProject.title}
+            initialRun={selectedProject.agentTaskRuns[0] ? serializeAgentRun(selectedProject.agentTaskRuns[0]) : null}
+            initialRuns={selectedProject.agentTaskRuns.map((run) => serializeAgentRun(run))}
+          />
         </section>
-
-        <div className="order-3 grid content-start gap-4 xl:col-span-2 2xl:col-span-1">
-          <AgentOutcomePanel project={selectedProject} />
-          <Panel title="下一步">
-            <div className="grid gap-2">
-              {projectReviewCount > 0 ? (
-                <Link href={`/?project=${selectedProject.id}&view=pipeline&candidateFilter=review`} className="rounded-lg border border-[#edf0f2] bg-[#f8fafc] px-3 py-2 text-sm font-semibold text-[#28251e] transition hover:border-[#9db7d3] hover:bg-white">
-                  处理候选复核
-                </Link>
-              ) : (
-                <a href="#agent-command" className="rounded-lg border border-[#edf0f2] bg-[#f8fafc] px-3 py-2 text-sm font-semibold text-[#28251e] transition hover:border-[#9db7d3] hover:bg-white">
-                  生成执行计划
-                </a>
-              )}
-              <Link href={`/?project=${selectedProject.id}&view=supply`} className="rounded-lg border border-[#edf0f2] bg-[#f8fafc] px-3 py-2 text-sm font-semibold text-[#28251e] transition hover:border-[#9db7d3] hover:bg-white">
-                查看供给发现
-              </Link>
-              <Link href={`/?project=${selectedProject.id}&view=growth`} className="rounded-lg border border-[#edf0f2] bg-[#f8fafc] px-3 py-2 text-sm font-semibold text-[#28251e] transition hover:border-[#9db7d3] hover:bg-white">
-                准备分发和复盘
-              </Link>
-            </div>
-          </Panel>
-        </div>
       </section>
-    </section>
-  );
-}
-
-function AgentFlowChecklist({
-  project,
-  reviewCount,
-  internalCount,
-  externalCount,
-  outreachReady,
-}: {
-  project: ProjectWorkspaceData;
-  reviewCount: number;
-  internalCount: number;
-  externalCount: number;
-  outreachReady: number;
-}) {
-  const profileReady = Object.keys(parseJson<Record<string, unknown>>(project.personaJson, {})).length > 0 || project.status === "analyzed";
-  const steps = [
-    { label: "确认需求", value: profileReady ? "已画像" : "待补齐", done: profileReady, href: `/?project=${project.id}&view=demand` },
-    { label: "召回内部专家", value: `${internalCount} 位`, done: internalCount > 0, href: `/?project=${project.id}&view=supply` },
-    { label: "补充公开候选", value: `${externalCount} 位`, done: externalCount > 0, href: `/?project=${project.id}&view=supply` },
-    { label: "处理复核", value: `${reviewCount} 项`, done: reviewCount === 0 && project.candidates.length > 0, href: `/?project=${project.id}&view=pipeline&candidateFilter=review` },
-    { label: "触达/试标", value: `${outreachReady} 可触达`, done: outreachReady > 0, href: `/?project=${project.id}&view=pipeline&candidateFilter=outreachReady` },
-  ];
-  return (
-    <Panel title="招募路径">
-      <div className="grid gap-2">
-        {steps.map((step, index) => (
-          <Link key={step.label} href={step.href} className="flex items-center gap-3 rounded-lg border border-[#edf0f2] bg-[#f8fafc] px-3 py-2 transition hover:border-[#9db7d3] hover:bg-white">
-            <span className={`inline-flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${step.done ? "bg-emerald-600 text-white" : "bg-white text-[#7a7469]"}`}>
-              {step.done ? <CheckCircle2 className="size-3.5" /> : index + 1}
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-semibold text-[#28251e]">{step.label}</span>
-              <span className="block truncate text-xs text-[#7a7469]">{step.value}</span>
-            </span>
-          </Link>
-        ))}
-      </div>
-    </Panel>
-  );
-}
-
-function AgentOutcomePanel({ project }: { project: ProjectWorkspaceData }) {
-  const latest = project.agentTaskRuns[0];
-  if (!latest) {
-    return (
-      <Panel title="执行结果">
-        <p className="text-sm leading-6 text-[#5f5a50]">还没有任务记录。先生成执行计划，系统会保存每一步的状态和结果。</p>
-      </Panel>
-    );
-  }
-  const report = parseJson<{
-    summary?: string;
-    failed?: string[];
-    written?: string[];
-    needsReview?: string[];
-    nextActions?: string[];
-  }>(latest.reportJson, {});
-  return (
-    <section className="rounded-lg border border-[#e7e7e2] bg-white p-4 shadow-[0_1px_2px_rgba(17,17,17,0.04)]">
-      <div className="flex flex-wrap items-center gap-2">
-        <MessageSquare className="size-4 text-[#2563eb]" />
-        <h3 className="text-sm font-semibold text-[#28251e]">最近一次任务</h3>
-        <Badge tone={agentRunStatusTone(latest.status)}>{formatAgentRunStatus(latest.status)}</Badge>
-      </div>
-      <p className="mt-2 text-sm leading-6 text-[#5f5a50]">{report.summary ?? "任务记录已保存。"}</p>
-      <div className="mt-3 grid gap-2">
-        {(report.written ?? []).slice(0, 3).map((item) => <Badge key={item} tone="blue">{item}</Badge>)}
-        {(report.needsReview ?? []).slice(0, 3).map((item) => <Badge key={item} tone="amber">{item}</Badge>)}
-        {(report.failed ?? []).slice(0, 2).map((item) => <Badge key={item} tone="red">{item}</Badge>)}
-      </div>
-      <div className="mt-3 grid gap-2">
-        {(report.nextActions ?? ["生成或执行下一步任务。"]).slice(0, 3).map((item) => (
-          <p key={item} className="rounded-lg border border-[#edf0f2] bg-[#f8fafc] px-3 py-2 text-xs leading-5 text-[#5f5a50]">{item}</p>
-        ))}
-      </div>
     </section>
   );
 }
@@ -1619,7 +1596,9 @@ function FollowUpSuggestions({
   candidates: ProjectWorkspaceData["candidates"];
 }) {
   const topCandidate = candidates.find((candidate) => canApproveForOutreach({ candidate, expert: candidate.expert, project }).ok);
-  const unscoredCandidate = candidates.find((candidate) => candidate.fitScore === null);
+  const unscoredCandidate = candidates.find(
+    (candidate) => candidate.fitScore === null && isCandidateEligibleForSupplyMetrics(candidate),
+  );
   const trialCandidate = candidates.find((candidate) => canTransitionCandidateStage(candidate.stage, "trial").ok);
 
   return (
@@ -1649,17 +1628,19 @@ function SourcingModule({
   project,
   selectedCandidateId,
   candidateFilter,
+  candidateSourceRunId,
 }: {
   project: ProjectWorkspaceData;
   selectedCandidateId?: string;
   candidateFilter: CandidateFilter;
+  candidateSourceRunId: string | null;
 }) {
-  const filteredCandidates = filterCandidates(project.candidates, candidateFilter);
+  const filteredCandidates = filterCandidatePipeline(
+    filterCandidatesBySourceRun(project.candidates, candidateSourceRunId),
+    candidateFilter,
+  );
   const selectedCandidate =
-    project.candidates.find((candidate) => candidate.id === selectedCandidateId) ??
-    filteredCandidates.find((candidate) => needsCandidateReview(candidate)) ??
-    filteredCandidates[0] ??
-    null;
+    filteredCandidates.find((candidate) => candidate.id === selectedCandidateId) ?? null;
   return (
     <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
       <div className="grid content-start gap-4">
@@ -1669,10 +1650,13 @@ function SourcingModule({
           candidates={project.candidates}
         />
         <CandidateTable
+          project={{ riskLevel: project.riskLevel, domain: project.domain }}
           projectId={project.id}
           candidates={filteredCandidates}
           selectedCandidateId={selectedCandidateId}
           candidateFilter={candidateFilter}
+          candidateSourceRunId={candidateSourceRunId}
+          screenedOutCount={project.candidates.filter((candidate) => candidate.stage === "screened_out").length}
         />
       </div>
       <CandidatePanel
@@ -1743,10 +1727,15 @@ function RecruitmentAssetModule({
 }
 
 function SupplyMatchingModule({ project }: { project: ProjectWorkspaceData }) {
-  const internalCandidates = project.candidates.filter((candidate) => candidate.sourceType === "internal");
-  const externalCandidates = project.candidates.filter((candidate) => candidate.sourceType === "external");
+  const internalCandidates = project.candidates.filter(
+    (candidate) => candidate.sourceType === "internal" && isCandidateEligibleForSupplyMetrics(candidate),
+  );
+  const externalCandidates = project.candidates.filter(
+    (candidate) => candidate.sourceType === "external" && isCandidateEligibleForSupplyMetrics(candidate),
+  );
   const openGaps = project.supplyGaps.filter((gap) => gap.status === "open");
   const rankedCandidates = project.candidates
+    .filter(isCandidateEligibleForSupplyMetrics)
     .slice()
     .sort((a, b) => (b.conversionProbability ?? 0) - (a.conversionProbability ?? 0) || (b.fitScore ?? 0) - (a.fitScore ?? 0))
     .slice(0, 12);
@@ -1774,7 +1763,7 @@ function SupplyMatchingModule({ project }: { project: ProjectWorkspaceData }) {
           <Info label="目标" value={project.quantity?.toString() ?? "-"} />
           <Info label="内部召回" value={internalCandidates.length.toString()} />
           <Info label="外部发现" value={externalCandidates.length.toString()} />
-          <Info label="高证据" value={project.candidates.filter((candidate) => evidenceRankForUi(candidate.expert.evidenceLevel) >= 2).length.toString()} />
+          <Info label="高证据" value={project.candidates.filter(isHighEvidenceCandidate).length.toString()} />
           <Info label="缺口" value={openGaps.length.toString()} />
         </div>
       </section>
@@ -1824,6 +1813,12 @@ function ExpertDiscoveryModule({
   mergeSuggestions: MergeSuggestionData[];
 }) {
   const externalRuns = project.supplySearchRuns.filter((run) => run.runType === "external");
+  const latestExternalSummary = externalRuns[0] ? parseJson<Record<string, unknown>>(externalRuns[0].summaryJson, {}) : {};
+  const latestAcceptance = readExternalResearchAcceptance(latestExternalSummary.acceptance);
+  const pendingExternalTask = project.agentTaskRuns.find((run) =>
+    ["external_research", "search_candidates", "enrich_candidate_evidence", "full_sourcing"].includes(run.intent) &&
+    ["planned", "waiting_for_confirmation", "running", "failed", "partially_succeeded"].includes(run.status),
+  );
   return (
     <>
       <section className="rounded-lg border border-[#e7e7e2] bg-white p-5 shadow-[0_1px_2px_rgba(17,17,17,0.04)]">
@@ -1838,12 +1833,12 @@ function ExpertDiscoveryModule({
             </p>
           </div>
           <ApiButton
-            label="运行外部深搜"
+            label="准备外部深搜"
             endpoint={`/api/projects/${project.id}/external-research`}
             icon="search"
             variant="primary"
-            confirmMessage="本次会调用外部搜索服务；系统会先复用已保存结果。确认继续？"
-            successLabel="外部深搜已完成。"
+            confirmMessage="系统会先展示需要确认的搜索方向，确认后才会调用公开搜索。继续？"
+            successLabel="外部深搜已准备，请确认搜索方向后继续。"
           />
         </div>
         <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
@@ -1852,6 +1847,8 @@ function ExpertDiscoveryModule({
           <Info label="来源指标" value={project.searchSourceMetrics.length.toString()} />
           <Info label="合并建议" value={mergeSuggestions.length.toString()} />
         </div>
+        {pendingExternalTask ? <ExternalTaskContinuePanel run={pendingExternalTask} /> : null}
+        {latestAcceptance ? <ExternalResearchAcceptancePanel acceptance={latestAcceptance} /> : null}
       </section>
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.5fr)]">
@@ -1860,6 +1857,7 @@ function ExpertDiscoveryModule({
             {project.supplySearchRuns.map((run) => {
               const queries = parseJson<string[]>(run.queriesJson, []);
               const summary = parseJson<Record<string, unknown>>(run.summaryJson, {});
+              const acceptance = readExternalResearchAcceptance(summary.acceptance);
               return (
                 <div key={run.id} className="rounded-lg border border-[#f0eee8] bg-[#f9f9f9] p-3">
                   <div className="flex flex-wrap items-center gap-2">
@@ -1871,6 +1869,11 @@ function ExpertDiscoveryModule({
                     {typeof summary.candidates === "number" ? `${summary.candidates} 候选` : "运行记录已保存"}
                     {typeof summary.searchResults === "number" ? ` · ${summary.searchResults} 搜索结果` : ""}
                   </p>
+                  {acceptance ? (
+                    <p className="mt-2 text-xs font-medium text-[#4d473e]">
+                      {acceptance.passed ? "可继续复核" : "需补齐证据"} · E2+ {acceptance.e2PlusCandidates} · 覆盖 {acceptance.coverageLabels.join("、") || "-"}
+                    </p>
+                  ) : null}
                   <div className="mt-2 flex flex-wrap gap-1">
                     {queries.slice(0, 4).map((query) => <Badge key={query}>{query}</Badge>)}
                   </div>
@@ -1880,6 +1883,7 @@ function ExpertDiscoveryModule({
             {!project.supplySearchRuns.length ? <EmptyListText text="执行召回或深搜后可查看记录。" /> : null}
           </div>
         </Panel>
+        <div id="merge-suggestions" className="scroll-mt-28">
         <Panel title="合并建议">
           <div className="grid max-h-[520px] gap-2 overflow-y-auto pr-1">
             {mergeSuggestions.map((item) => {
@@ -1914,6 +1918,31 @@ function ExpertDiscoveryModule({
               );
             })}
             {!mergeSuggestions.length ? <EmptyListText text="发现同名候选后可处理合并建议。" /> : null}
+          </div>
+        </Panel>
+        </div>
+      </section>
+
+      <section id="search-results" className="scroll-mt-28">
+        <Panel title="公开搜索结果">
+          <div className="grid max-h-[520px] gap-2 overflow-y-auto pr-1">
+            {project.searchResults.map((result) => (
+              <a
+                key={result.id}
+                href={result.url}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-lg border border-[#f0eee8] bg-[#f9f9f9] p-3 transition hover:border-[#c9d7e6] hover:bg-white"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <p className="min-w-0 text-sm font-semibold leading-5 text-[#28251e]">{result.title}</p>
+                  <Badge>{result.domain ?? "公开网页"}</Badge>
+                </div>
+                <p className="mt-1 line-clamp-2 text-xs leading-5 text-[#7a7469]">{result.snippet || "暂无摘要，打开来源查看。"}</p>
+                <p className="mt-2 text-[11px] leading-5 text-[#8c8578]">搜索方向：{result.query}</p>
+              </a>
+            ))}
+            {!project.searchResults.length ? <EmptyListText text="完成公开搜索后可在这里查看来源结果。" /> : null}
           </div>
         </Panel>
       </section>
@@ -2271,7 +2300,7 @@ function RecruitmentRetrospectiveModule({ project }: { project: ProjectWorkspace
     sourced: project.candidates.length,
     approved: project.candidates.filter((candidate) => !candidate.humanReviewNeeded).length,
     contacted: project.candidates.filter((candidate) => ["contacted", "replied", "screening", "trial", "contracting", "onboarded", "active"].includes(candidate.stage)).length,
-    trial: project.candidates.filter((candidate) => candidate.stage === "trial" || candidate.trialTasks.length > 0).length,
+    trial: project.candidates.filter((candidate) => candidate.stage === "trial").length,
     onboarded: project.candidates.filter((candidate) => ["onboarded", "active"].includes(candidate.stage)).length,
   };
   return (
@@ -2383,9 +2412,18 @@ function SupplyCandidateCard({
   showRank?: boolean;
 }) {
   const rank = parseJson<{ reasons?: string[]; risks?: string[] }>(candidate.rankReasonJson, {});
+  const scoring = parseJson<{ topReasons?: string[] }>(candidate.scoringJson, {});
+  const risks = parseJson<string[]>(candidate.risksJson, []);
+  const missing = parseJson<string[]>(candidate.missingJson, []);
+  const signalValues = candidate.expert.signals.slice(0, 3).map((signal) => signal.value);
+  const qualityScores = candidate.expert.qualityMetrics.map((metric) => metric.score).filter((score) => Number.isFinite(score));
+  const qualityAverage = qualityScores.length
+    ? Math.round(qualityScores.reduce((sum, score) => sum + score, 0) / qualityScores.length)
+    : null;
+  const reasons = (scoring.topReasons?.length ? scoring.topReasons : rank.reasons ?? []).slice(0, 3);
   const gate = canApproveForOutreach({ candidate, expert: candidate.expert });
   return (
-    <a href={`/?project=${projectId}&view=pipeline&candidate=${candidate.id}`} className="grid gap-2 rounded-lg border border-[#f0eee8] bg-[#f9f9f9] p-3 transition hover:border-[#2563eb33] hover:bg-[#fbfdff]">
+    <a href={`/?project=${projectId}&view=pipeline&candidate=${candidate.id}`} className="grid gap-3 rounded-lg border border-[#f0eee8] bg-[#f9f9f9] p-3 transition hover:border-[#2563eb33] hover:bg-[#fbfdff]">
       <span className="flex items-start justify-between gap-3">
         <span className="min-w-0">
           <span className="block truncate text-sm font-semibold text-[#28251e]">{candidate.expert.name}</span>
@@ -2395,11 +2433,27 @@ function SupplyCandidateCard({
       </span>
       <span className="flex flex-wrap gap-2">
         <Badge tone={candidate.sourceType === "internal" ? "blue" : "zinc"}>{formatSourceType(candidate.sourceType)}</Badge>
+        <Badge tone="zinc">匹配 {candidate.fitScore ?? "-"}</Badge>
         <Badge tone={candidate.humanReviewNeeded ? "amber" : "green"}>{candidate.humanReviewNeeded ? "待复核" : "已通过"}</Badge>
         {showRank && typeof candidate.conversionProbability === "number" ? <Badge tone="indigo">{Math.round(candidate.conversionProbability * 100)}%</Badge> : null}
         <Badge tone={gate.ok ? "green" : "amber"}>{gate.ok ? "可触达" : "需处理"}</Badge>
       </span>
-      {rank.reasons?.length ? <span className="line-clamp-2 text-xs leading-5 text-[#7a7469]">{rank.reasons.join("；")}</span> : null}
+      <span className="grid gap-1 text-xs leading-5 text-[#6f695f]">
+        {reasons.length ? <span className="line-clamp-2">推荐依据：{reasons.join("；")}</span> : null}
+        {signalValues.length ? <span className="line-clamp-1">能力信号：{signalValues.join("、")}</span> : null}
+        <span>
+          质量记录：{qualityAverage ? `${qualityAverage} 分 / ${qualityScores.length} 条` : "暂无"} · 证据项：{candidate.evidenceItems.length}
+        </span>
+      </span>
+      {missing.length || risks.length ? (
+        <span className="grid gap-1 rounded-lg bg-white px-3 py-2 text-xs leading-5 text-[#7a7469]">
+          {missing.length ? <span>需补齐：{missing.slice(0, 2).join("；")}</span> : null}
+          {risks.length ? <span className="text-rose-700">风险：{risks.slice(0, 2).join("；")}</span> : null}
+          {candidate.nextAction ? <span className="font-medium text-[#4d473e]">下一步：{candidate.nextAction}</span> : null}
+        </span>
+      ) : candidate.nextAction ? (
+        <span className="text-xs font-medium leading-5 text-[#4d473e]">下一步：{candidate.nextAction}</span>
+      ) : null}
     </a>
   );
 }
@@ -2464,6 +2518,17 @@ function MarketingPostReader({
   const canApprove = post.status === "draft" || post.status === "needs_review";
   const canMarkPublished = post.status === "approved" || post.status === "scheduled";
   const statusLabel = formatMarketingStatus(post.status);
+  const attractionReport = evaluateMarketingAttractionReadiness({
+    posts: [
+      {
+        channel: post.channel,
+        title: post.title,
+        body: post.body,
+        cta: post.cta,
+        riskNotes,
+      },
+    ],
+  });
   return (
     <article className="min-h-[520px] rounded-lg border border-[#e7e7e2] bg-white p-4 shadow-[0_1px_2px_rgba(17,17,17,0.04)] lg:p-5">
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
@@ -2520,9 +2585,175 @@ function MarketingPostReader({
           ))}
         </div>
       ) : null}
+      <MarketingAttractionPanel report={attractionReport} />
       {riskNotes.length ? <RiskReviewList items={riskNotes} /> : null}
     </article>
   );
+}
+
+function ExternalTaskContinuePanel({ run }: { run: ProjectWorkspaceData["agentTaskRuns"][number] }) {
+  const confirmationStep = run.steps.find((step) => step.stepKey === "confirm_external_search");
+  const checks = parseJson<{
+    queries?: number;
+    cached?: number;
+    uncached?: number;
+    coverageLabels?: string[];
+    queryPreview?: string[];
+  }>(confirmationStep?.checksJson ?? "{}", {});
+  const canConfirm = run.status === "waiting_for_confirmation";
+  const canStart = run.status === "planned";
+  const canRetry = run.status === "failed" || run.status === "partially_succeeded";
+
+  return (
+    <div className="mt-4 rounded-lg border border-[#dbe4ee] bg-[#fbfdff] p-4">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone={agentRunStatusTone(run.status)}>{formatAgentRunStatus(run.status)}</Badge>
+            <h4 className="text-sm font-semibold text-[#28251e]">外部深搜任务</h4>
+          </div>
+          <p className="mt-2 text-sm leading-6 text-[#5f5a50]">
+            {canConfirm
+              ? "请确认搜索方向，确认后会查找公开来源并抽取候选。"
+              : canStart
+                ? "任务已准备好，先生成确认信息再继续。"
+                : "任务记录已保存，可按当前状态继续处理。"}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2 lg:justify-end">
+          {canStart ? (
+            <ApiButton
+              label="查看搜索方向"
+              endpoint={`/api/agent-runs/${run.id}/start`}
+              icon="search"
+              variant="primary"
+              successLabel="搜索方向已准备，请确认后继续。"
+            />
+          ) : null}
+          {canConfirm ? (
+            <ApiButton
+              label="确认并查找"
+              endpoint={`/api/agent-runs/${run.id}/confirm`}
+              icon="search"
+              variant="primary"
+              confirmMessage="确认后会调用公开搜索并写入候选和证据。继续？"
+              successLabel="公开候选已查找，正在刷新结果。"
+            />
+          ) : null}
+          {canRetry ? (
+            <ApiButton
+              label="重试未完成"
+              endpoint={`/api/agent-runs/${run.id}/retry`}
+              icon="run"
+              successLabel="任务已重新推进。"
+            />
+          ) : null}
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2 md:grid-cols-4">
+        <Info label="搜索方向" value={typeof checks.queries === "number" ? checks.queries.toString() : "-"} />
+        <Info label="已保存" value={typeof checks.cached === "number" ? checks.cached.toString() : "-"} />
+        <Info label="需新查" value={typeof checks.uncached === "number" ? checks.uncached.toString() : "-"} />
+        <Info label="覆盖" value={checks.coverageLabels?.length ? checks.coverageLabels.join("、") : "-"} />
+      </div>
+      {checks.queryPreview?.length ? (
+        <div className="mt-3 flex flex-wrap gap-1">
+          {checks.queryPreview.slice(0, 4).map((query) => <Badge key={query}>{query}</Badge>)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ExternalResearchAcceptancePanel({ acceptance }: { acceptance: ExternalResearchAcceptanceReport }) {
+  return (
+    <div className="mt-4 rounded-lg border border-[#e7e7e2] bg-[#fbfdff] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <Badge tone={acceptance.passed ? "green" : "amber"}>{acceptance.passed ? "可继续复核" : "需补齐证据"}</Badge>
+            <h4 className="text-sm font-semibold text-[#28251e]">公开候选质量</h4>
+          </div>
+          <p className="mt-2 text-sm leading-6 text-[#5f5a50]">
+            覆盖 {acceptance.coverageLabels.join("、") || "-"}，找到 {acceptance.e2PlusCandidates} 位 E2+ 候选，{acceptance.reviewRequiredCandidates} 位需复核。
+          </p>
+          {acceptance.candidateSourceCoverage.length ? (
+            <p className="mt-1 text-xs leading-5 text-[#7a7469]">
+              候选实际来自 {acceptance.candidateSourceCoverage.map(formatCandidateSourceCoverage).join("、")}。
+            </p>
+          ) : null}
+        </div>
+        <div className="grid grid-cols-3 gap-2 text-right">
+          <Info label="查询" value={acceptance.queryCount.toString()} />
+          <Info label="复用" value={acceptance.cached.toString()} />
+          <Info label="新查" value={acceptance.uncached.toString()} />
+        </div>
+      </div>
+      {acceptance.blockers.length ? <List label="需要补齐" items={acceptance.blockers} tone="amber" /> : null}
+      {acceptance.nextActions.length ? <List label="下一步" items={acceptance.nextActions} /> : null}
+    </div>
+  );
+}
+
+function MarketingAttractionPanel({ report }: { report: MarketingAttractionReport }) {
+  return (
+    <div className="mt-4 rounded-lg border border-[#e7eef7] bg-[#fbfdff] p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Badge tone={report.passed ? "green" : "amber"}>{report.passed ? "报名动作完整" : "需要修改"}</Badge>
+          <span className="text-sm font-semibold text-[#28251e]">报名动作检查</span>
+        </div>
+        <span className="text-xs text-[#7a7469]">{report.readyPosts}/{report.totalPosts} 条可进入审批</span>
+      </div>
+      {report.blockers.length ? <List label="修改项" items={report.blockers} tone="amber" /> : null}
+      {report.passed ? <List label="下一步" items={report.nextActions} /> : null}
+    </div>
+  );
+}
+
+function readExternalResearchAcceptance(value: unknown): ExternalResearchAcceptanceReport | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const item = value as Partial<ExternalResearchAcceptanceReport>;
+  if (typeof item.passed !== "boolean") return null;
+  return {
+    passed: item.passed,
+    queryCount: safeNumber(item.queryCount),
+    cached: safeNumber(item.cached),
+    uncached: safeNumber(item.uncached),
+    sourceCoverage: safeStringArray(item.sourceCoverage),
+    coverageLabels: safeStringArray(item.coverageLabels),
+    candidateSourceCoverage: safeStringArray(item.candidateSourceCoverage),
+    unmetSourceCoverage: safeStringArray(item.unmetSourceCoverage),
+    providerStats: item.providerStats && typeof item.providerStats === "object" && !Array.isArray(item.providerStats) ? (item.providerStats as Record<string, number>) : {},
+    resultCount: safeNumber(item.resultCount),
+    candidateCount: safeNumber(item.candidateCount),
+    e2PlusCandidates: safeNumber(item.e2PlusCandidates),
+    hardRequirementReadyCandidates: safeNumber(item.hardRequirementReadyCandidates),
+    candidateHardRequirements: safeStringArray(item.candidateHardRequirements),
+    reviewRequiredCandidates: safeNumber(item.reviewRequiredCandidates),
+    outreachReadyCandidates: safeNumber(item.outreachReadyCandidates),
+    blockers: safeStringArray(item.blockers),
+    needsReview: safeStringArray(item.needsReview),
+    nextActions: safeStringArray(item.nextActions),
+  };
+}
+
+function formatCandidateSourceCoverage(value: string) {
+  const labels: Record<string, string> = {
+    community: "开源社区",
+    academic: "会议/论文",
+    institution: "机构主页",
+    professional_profile: "专家主页",
+  };
+  return labels[value] ?? value;
+}
+
+function safeNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function safeStringArray(value: unknown) {
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
 }
 
 function RiskReviewList({ items }: { items: string[] }) {
@@ -2647,29 +2878,16 @@ function countOutreachReady(project: Pick<ProjectWorkspaceData, "riskLevel" | "d
   ).length;
 }
 
-function filterCandidates<T extends { stage: string; humanReviewNeeded?: boolean; expert?: { evidenceLevel?: string; consentState?: string } }>(candidates: T[], filter: CandidateFilter) {
-  if (filter === "highEvidence") return candidates.filter((candidate) => evidenceRankForUi(candidate.expert?.evidenceLevel ?? "E0") >= 2);
-  if (filter === "outreachReady") {
-    return candidates.filter((candidate) => {
-      const evidenceOk = evidenceRankForUi(candidate.expert?.evidenceLevel ?? "E0") >= 2;
-      const consentOk = !["unsubscribed", "do_not_contact", "delete_requested"].includes(candidate.expert?.consentState ?? "");
-      return evidenceOk && consentOk && !candidate.humanReviewNeeded && candidate.stage === "approved_for_outreach";
-    });
-  }
-  if (filter === "review") return candidates.filter((candidate) => Boolean(candidate.humanReviewNeeded) || evidenceRankForUi(candidate.expert?.evidenceLevel ?? "E0") < 2);
-  if (filter === "trial") return candidates.filter((candidate) => candidate.stage === "trial");
-  if (filter === "active") return candidates.filter((candidate) => ["onboarded", "active"].includes(candidate.stage));
-  return candidates;
-}
-
 function formatCandidateFilter(filter: CandidateFilter) {
   const labels: Record<CandidateFilter, string> = {
     all: "全部候选",
+    external: "外部发现人力",
     highEvidence: "高证据候选",
     outreachReady: "可触达候选",
     review: "待复核候选",
     trial: "试标中候选",
     active: "已入池专家",
+    screenedOut: "暂不推进候选",
   };
   return labels[filter];
 }
@@ -2792,11 +3010,15 @@ function formatProviderName(provider: string) {
 }
 
 function CandidateTable({
+  project,
   projectId,
   candidates,
   selectedCandidateId,
   candidateFilter,
+  candidateSourceRunId,
+  screenedOutCount,
 }: {
+  project: { riskLevel: string; domain: string | null };
   projectId: string;
   candidates: Array<{
     id: string;
@@ -2805,18 +3027,24 @@ function CandidateTable({
     sourceType: string;
     conversionProbability: number | null;
     humanReviewNeeded: boolean;
+    risksJson: string;
+    outreachDrafts: Array<{ id: string; status: string }>;
     expert: {
       name: string;
       title: string | null;
       affiliation: string | null;
       evidenceLevel: string;
       consentState: string;
+      contactJson: string;
+      sourceUrl: string | null;
     };
   }>;
   selectedCandidateId?: string;
   candidateFilter: CandidateFilter;
+  candidateSourceRunId: string | null;
+  screenedOutCount: number;
 }) {
-  const filterLabel = formatCandidateFilter(candidateFilter);
+  const filterLabel = candidateSourceRunId ? `本次${formatCandidateFilter(candidateFilter)}` : formatCandidateFilter(candidateFilter);
   return (
     <section className="overflow-hidden rounded-lg border border-[#e7e7e2] bg-white shadow-[0_1px_2px_rgba(17,17,17,0.04)]">
       <div className="flex items-center justify-between gap-3 border-b border-[#f0eee8] px-5 py-4">
@@ -2824,7 +3052,17 @@ function CandidateTable({
           <h3 className="font-semibold text-[#28251e]">候选管道</h3>
           <p className="text-sm text-[#7a7469]">{filterLabel} · 低证据或高风险候选会进入复核队列。</p>
         </div>
-        <Badge>{candidates.length} 候选</Badge>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {screenedOutCount > 0 ? (
+            <Link
+              href={`/?project=${projectId}&view=pipeline&candidateFilter=screenedOut`}
+              className="inline-flex h-7 items-center rounded-lg border border-[#e7e7e2] bg-white px-2.5 text-xs font-semibold text-[#5f5a50] transition hover:border-[#d8d8d0] hover:bg-[#f9f9f9]"
+            >
+              暂不推进 {screenedOutCount}
+            </Link>
+          ) : null}
+          <Badge>{candidates.length} 候选</Badge>
+        </div>
       </div>
       <div className="max-h-[560px] overflow-auto">
         <table className="w-full min-w-[820px] text-left text-sm">
@@ -2843,7 +3081,10 @@ function CandidateTable({
             {candidates.map((candidate) => (
               <tr key={candidate.id} className={selectedCandidateId === candidate.id ? "bg-[#2563eb0f]" : "hover:bg-[#f9f9f9]"}>
                 <td className="px-5 py-3">
-                  <a href={`/?project=${projectId}&view=pipeline&candidate=${candidate.id}`} className="font-medium text-[#28251e] hover:text-[#2563eb]">
+                  <a
+                    href={getCandidatePipelineHref({ projectId, candidateId: candidate.id, candidateFilter, sourceRunId: candidateSourceRunId })}
+                    className="font-medium text-[#28251e] hover:text-[#2563eb]"
+                  >
                     {candidate.expert.name}
                   </a>
                   <p className="max-w-[280px] truncate text-xs text-[#7a7469]">
@@ -2859,10 +3100,24 @@ function CandidateTable({
                 </td>
                 <td className="px-3 py-3"><Badge tone={candidate.sourceType === "internal" ? "blue" : candidate.sourceType === "referred" ? "indigo" : "zinc"}>{formatSourceType(candidate.sourceType)}</Badge></td>
                 <td className="px-3 py-3"><Badge>{formatPipelineStage(candidate.stage)}</Badge></td>
-                <td className="px-3 py-3">{candidate.humanReviewNeeded ? <Badge tone="amber">待复核</Badge> : <Badge tone="green">已通过</Badge>}</td>
+                <td className="px-3 py-3">
+                  {candidate.stage === "screened_out" ? (
+                    <Badge tone="zinc">暂不推进</Badge>
+                  ) : candidate.humanReviewNeeded ? (
+                    <Badge tone="amber">待复核</Badge>
+                  ) : (
+                    <Badge tone="green">已通过</Badge>
+                  )}
+                </td>
                 <td className="px-5 py-3">
                   <div className="flex gap-2">
-                    <CandidateRowAction projectId={projectId} candidate={candidate} />
+                    <CandidateRowAction
+                      project={project}
+                      projectId={projectId}
+                      candidate={candidate}
+                      candidateFilter={candidateFilter}
+                      candidateSourceRunId={candidateSourceRunId}
+                    />
                   </div>
                 </td>
               </tr>
@@ -2882,24 +3137,47 @@ function CandidateTable({
 }
 
 function CandidateRowAction({
+  project,
   projectId,
   candidate,
+  candidateFilter,
+  candidateSourceRunId,
 }: {
+  project: { riskLevel: string; domain: string | null };
   projectId: string;
   candidate: {
     id: string;
     stage: string;
     fitScore: number | null;
     humanReviewNeeded: boolean;
+    risksJson: string;
+    outreachDrafts: Array<{ id: string; status: string }>;
     expert: {
       evidenceLevel: string;
       consentState: string;
+      contactJson: string;
+      sourceUrl: string | null;
     };
   };
+  candidateFilter: CandidateFilter;
+  candidateSourceRunId: string | null;
 }) {
+  const detailsHref = getCandidatePipelineHref({
+    projectId,
+    candidateId: candidate.id,
+    candidateFilter,
+    sourceRunId: candidateSourceRunId,
+  });
+  if (candidate.stage === "screened_out") {
+    return (
+      <Link href={detailsHref} className="inline-flex h-9 items-center justify-center rounded-lg border border-[#e7e7e2] bg-white px-3 text-sm font-semibold text-[#5f5a50] transition hover:border-[#d8d8d0] hover:bg-[#f9f9f9]">
+        查看筛选结论
+      </Link>
+    );
+  }
   if (candidate.humanReviewNeeded || evidenceRankForUi(candidate.expert.evidenceLevel) < 2) {
     return (
-      <Link href={`/?project=${projectId}&view=pipeline&candidate=${candidate.id}`} className="inline-flex h-9 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 text-sm font-semibold text-amber-800 transition hover:bg-amber-100">
+      <Link href={detailsHref} className="inline-flex h-9 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 text-sm font-semibold text-amber-800 transition hover:bg-amber-100">
         查看证据
       </Link>
     );
@@ -2907,7 +3185,22 @@ function CandidateRowAction({
   if (candidate.fitScore === null) {
     return <ApiButton label="补评分" endpoint={`/api/project-candidates/${candidate.id}/score`} icon="analyze" />;
   }
+  if (candidate.outreachDrafts.some((draft) => draft.status === "draft")) {
+    return (
+      <Link href={detailsHref} className="inline-flex h-9 items-center justify-center rounded-lg border border-[#dbe4ee] bg-white px-3 text-sm font-semibold text-[#2563eb] transition hover:bg-[#f6f9fc]">
+        复核触达草稿
+      </Link>
+    );
+  }
   if (candidate.stage === "verified" || candidate.stage === "approved_for_outreach") {
+    const outreachGate = canApproveForOutreach({ candidate, expert: candidate.expert, project });
+    if (!outreachGate.ok) {
+      return (
+        <Link href={detailsHref} title={formatGateReason(outreachGate.reason)} className="inline-flex h-9 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 text-sm font-semibold text-amber-800 transition hover:bg-amber-100">
+          处理准入条件
+        </Link>
+      );
+    }
     return <ApiButton label="生成触达" endpoint={`/api/project-candidates/${candidate.id}/outreach`} icon="outreach" />;
   }
   if (candidate.stage === "contacted" || candidate.stage === "replied" || candidate.stage === "screening") {
@@ -2922,7 +3215,7 @@ function CandidateRowAction({
     );
   }
   return (
-    <Link href={`/?project=${projectId}&view=pipeline&candidate=${candidate.id}`} className="inline-flex h-9 items-center justify-center rounded-lg border border-[#e7e7e2] bg-white px-3 text-sm font-semibold text-[#28251e] transition hover:border-[#d8d8d0] hover:bg-[#f9f9f9]">
+    <Link href={detailsHref} className="inline-flex h-9 items-center justify-center rounded-lg border border-[#e7e7e2] bg-white px-3 text-sm font-semibold text-[#28251e] transition hover:border-[#d8d8d0] hover:bg-[#f9f9f9]">
       查看详情
     </Link>
   );
@@ -3002,6 +3295,7 @@ function CandidatePanel({
     contactPermissionBasis?: string;
     notes?: string;
   }>(candidate.expert.contactJson, {});
+  const evidenceSources = groupEvidenceBySource(candidate.evidenceItems);
 
   return (
     <aside className="rounded-lg border border-[#e7e7e2] bg-white shadow-[0_1px_2px_rgba(17,17,17,0.04)] xl:sticky xl:top-4 xl:max-h-[calc(100vh-32px)] xl:overflow-y-auto">
@@ -3034,13 +3328,21 @@ function CandidatePanel({
           <Info label="转化" value={typeof candidate.conversionProbability === "number" ? `${Math.round(candidate.conversionProbability * 100)}%` : "-"} />
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
-          <ApiButton
-            label="生成触达"
-            endpoint={`/api/project-candidates/${candidate.id}/outreach`}
-            icon="outreach"
-            disabled={!outreachGate.ok}
-            disabledReason={outreachGate.ok ? undefined : formatGateReason(outreachGate.reason)}
-          />
+          {candidate.stage === "screened_out" ? (
+            <Badge tone="zinc">当前项目暂不推进</Badge>
+          ) : candidate.fitScore === null ? (
+            <ApiButton label="评估匹配度" endpoint={`/api/project-candidates/${candidate.id}/score`} icon="analyze" />
+          ) : candidate.outreachDrafts.some((draft) => draft.status === "draft") ? (
+            <Badge tone="blue">触达草稿待复核</Badge>
+          ) : (
+            <ApiButton
+              label="生成触达"
+              endpoint={`/api/project-candidates/${candidate.id}/outreach`}
+              icon="outreach"
+              disabled={!outreachGate.ok}
+              disabledReason={outreachGate.ok ? undefined : formatGateReason(outreachGate.reason)}
+            />
+          )}
         </div>
       </div>
       <div className="grid gap-4 p-5">
@@ -3077,15 +3379,23 @@ function CandidatePanel({
         </Panel>
         <Panel title="证据">
           <div className="grid gap-3">
-            {candidate.evidenceItems.map((item) => (
-              <div key={item.id} className="rounded-lg border border-[#f0eee8] p-3">
+            {evidenceSources.map((source) => (
+              <div key={source.sourceUrl} className="rounded-lg border border-[#f0eee8] p-3">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm font-medium text-[#4d473e]">{item.claim}</p>
-                  <EvidenceBadge level={item.evidenceLevel} />
+                  <p className="text-sm font-medium text-[#4d473e]">{source.sourceTitle || formatEvidenceSourceLabel(null, source.sourceUrl)}</p>
+                  <EvidenceBadge level={source.evidenceLevel} />
                 </div>
-                <p className="mt-2 text-xs leading-5 text-[#7a7469]">{item.snippet}</p>
-                <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="mt-2 block truncate text-xs text-[#2563eb] hover:underline">
-                  {formatEvidenceSourceLabel(item.sourceTitle, item.sourceUrl)}
+                <ul className="mt-2 grid gap-1">
+                  {source.claims.map((claim) => (
+                    <li key={claim} className="flex gap-2 text-xs leading-5 text-[#5f5a50]">
+                      <span className="mt-2 size-1 shrink-0 rounded-full bg-[#9db7d3]" />
+                      <span>{claim}</span>
+                    </li>
+                  ))}
+                </ul>
+                {source.snippets[0] ? <p className="mt-2 text-xs leading-5 text-[#7a7469]">{source.snippets[0]}</p> : null}
+                <a href={source.sourceUrl} target="_blank" rel="noreferrer" className="mt-2 block truncate text-xs text-[#2563eb] hover:underline">
+                  打开公开来源
                 </a>
               </div>
             ))}
@@ -3096,7 +3406,7 @@ function CandidatePanel({
             <div key={draft.id} className="rounded-lg border border-[#f0eee8] p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="font-medium">{draft.subject}</p>
-                <Badge tone={draft.status === "sent" ? "green" : "zinc"}>{draft.status === "sent" ? "已发送" : "草稿"}</Badge>
+                <Badge tone={draft.status === "sent" ? "green" : "zinc"}>{formatOutreachDraftStatus(draft.status)}</Badge>
               </div>
               <pre className="mt-2 whitespace-pre-wrap text-xs leading-5 text-[#5f5a50]">{draft.body}</pre>
               <DraftStatusButton draftId={draft.id} disabled={draft.status === "sent" || !outreachGate.ok} />
@@ -3106,13 +3416,26 @@ function CandidatePanel({
           {!candidate.outreachDrafts.length ? <p className="text-sm text-[#7a7469]">尚未生成。</p> : null}
         </Panel>
         <Panel title="试标任务">
-          {candidate.trialTasks.map((trial) => (
-            <div key={trial.id} className="rounded-lg border border-[#f0eee8] p-3">
-              <p className="text-sm leading-6 text-[#4d473e]">{trial.instructions}</p>
-              <p className="mt-2 text-xs text-[#7a7469]">结果：{formatTrialOutcome(trial.outcome)} · 分数：{trial.score ?? "-"}</p>
-              <TrialResultForm candidateId={candidate.id} disabled={candidate.stage !== "trial"} />
-            </div>
-          ))}
+          {candidate.trialTasks.map((trial) => {
+            const preparation = readTrialPreparation(trial.rubricJson);
+            return (
+              <div key={trial.id} className="rounded-lg border border-[#f0eee8] p-3">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <Badge tone={candidate.stage === "trial" ? "green" : "amber"}>
+                    {candidate.stage === "trial" ? "试标进行中" : "试标准备中"}
+                  </Badge>
+                  <span className="text-xs text-[#7a7469]">结果：{formatTrialOutcome(trial.outcome)} · 分数：{trial.score ?? "-"}</span>
+                </div>
+                <p className="text-sm leading-6 text-[#4d473e]">{trial.instructions}</p>
+                <TrialRubric rubricJson={trial.rubricJson} />
+                {candidate.stage === "trial" ? (
+                  <TrialResultForm candidateId={candidate.id} />
+                ) : preparation?.status === "preparing" && canTransitionCandidateStage(candidate.stage, "trial").ok ? (
+                  <TrialStartForm candidateId={candidate.id} />
+                ) : null}
+              </div>
+            );
+          })}
           {!candidate.trialTasks.length ? <p className="text-sm text-[#7a7469]">尚未生成。</p> : null}
         </Panel>
         <Panel title="质量回流">
@@ -3121,6 +3444,51 @@ function CandidatePanel({
       </div>
     </aside>
   );
+}
+
+function TrialRubric({ rubricJson }: { rubricJson: string }) {
+  const rubric = parseJson<{
+    criteria?: Array<{ name?: string; weight?: number; description?: string }>;
+    passThreshold?: number;
+    reviewNotes?: string[];
+    preparation?: {
+      status?: string;
+      readyToStart?: boolean;
+      requiredMaterials?: string[];
+      nextAction?: string;
+    };
+  }>(rubricJson, {});
+  const criteria = rubric.criteria ?? [];
+  if (!criteria.length) return null;
+
+  return (
+    <details className="mt-3 rounded-lg border border-[#e7eef7] bg-[#fbfdff] p-3">
+      <summary className="cursor-pointer text-sm font-semibold text-[#28251e]">
+        查看评分标准 · 通过线 {rubric.passThreshold ?? 75}
+      </summary>
+      <div className="mt-3 grid gap-2">
+        {criteria.map((criterion) => (
+          <div key={`${criterion.name}-${criterion.weight}`} className="grid gap-1 border-b border-[#e7eef7] pb-2 last:border-b-0 last:pb-0">
+            <div className="flex items-center justify-between gap-3 text-sm">
+              <span className="font-medium text-[#4d473e]">{criterion.name || "评分维度"}</span>
+              <Badge tone="blue">{criterion.weight ?? 0}%</Badge>
+            </div>
+            {criterion.description ? <p className="text-xs leading-5 text-[#7a7469]">{criterion.description}</p> : null}
+          </div>
+        ))}
+      </div>
+      {rubric.reviewNotes?.length ? <List label="使用前确认" items={rubric.reviewNotes} tone="amber" /> : null}
+      {rubric.preparation?.requiredMaterials?.length ? (
+        <List label="开始前必备" items={rubric.preparation.requiredMaterials} tone="amber" />
+      ) : null}
+    </details>
+  );
+}
+
+function readTrialPreparation(rubricJson: string) {
+  return parseJson<{
+    preparation?: { status?: string; readyToStart?: boolean; requiredMaterials?: string[]; nextAction?: string };
+  }>(rubricJson, {}).preparation;
 }
 
 function ScoreBreakdown({
@@ -3542,6 +3910,7 @@ function formatRunType(runType: string) {
   const labels: Record<string, string> = {
     internal: "内部召回",
     external: "外部深搜",
+    evidence_enrichment: "候选补证",
     hybrid: "混合匹配",
   };
   return labels[runType] ?? "供给运行";
@@ -3551,6 +3920,7 @@ function formatRunStatus(status: string) {
   const labels: Record<string, string> = {
     running: "运行中",
     completed: "已完成",
+    quality_failed: "需继续补证",
     failed: "未完成",
   };
   return labels[status] ?? status;
@@ -3631,6 +4001,7 @@ function formatPipelineStage(stage: string) {
     contracting: "签约中",
     onboarded: "已入池",
     active: "合作中",
+    screened_out: "暂不推进",
     do_not_contact: "不再联系",
   };
   return labels[stage] ?? stage;
@@ -3656,6 +4027,7 @@ function reviewReasons(candidate: {
   if (candidate.humanReviewNeeded) reasons.push("需人工复核");
   if (["E0", "E1"].includes(candidate.expert?.evidenceLevel ?? "E0")) reasons.push("低证据");
   if (candidate.stage === "approved_for_outreach") reasons.push("待触达审批确认");
+  if (candidate.stage === "screened_out") reasons.push("本项目暂不推进");
   if (candidate.stage === "do_not_contact") reasons.push("DNC");
   if (["unsubscribed", "do_not_contact", "delete_requested"].includes(candidate.expert?.consentState ?? "")) {
     reasons.push("退订/删除请求");
@@ -3664,24 +4036,6 @@ function reviewReasons(candidate: {
   if (candidate.fitScore !== null && candidate.fitScore < 75) reasons.push("低匹配分");
   if (!reasons.length) reasons.push("待确认");
   return reasons;
-}
-
-function needsCandidateReview(candidate: {
-  stage: string;
-  fitScore: number | null;
-  humanReviewNeeded: boolean;
-  expert?: {
-    evidenceLevel: string;
-    consentState: string;
-  } | null;
-}) {
-  return (
-    candidate.humanReviewNeeded ||
-    ["E0", "E1"].includes(candidate.expert?.evidenceLevel ?? "E0") ||
-    candidate.stage === "approved_for_outreach" ||
-    candidate.stage === "do_not_contact" ||
-    ["unsubscribed", "do_not_contact", "delete_requested"].includes(candidate.expert?.consentState ?? "")
-  );
 }
 
 function formatGateReason(reason: string) {

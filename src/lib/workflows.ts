@@ -47,9 +47,11 @@ async function run<T>(input: {
   systemPrompt: string;
   userPayload: unknown;
   schema: ZodType<T>;
+  timeoutMs?: number;
+  maxAttempts?: number;
 }): Promise<WorkflowResult<T>> {
   try {
-    const result = await new BailianClient().runStructured<T>(input);
+    const result = await new BailianClient({ timeoutMs: input.timeoutMs, maxAttempts: input.maxAttempts }).runStructured<T>(input);
     if (!result.ok) {
       return {
         ok: false,
@@ -85,7 +87,15 @@ export function extractCandidatesFromSearch(payload: unknown) {
     systemPrompt: CANDIDATE_EXTRACTION_PROMPT,
     userPayload: payload,
     schema: extractCandidatesOutputSchema,
+    timeoutMs: getCandidateExtractionTimeoutMs(process.env.CANDIDATE_EXTRACTION_TIMEOUT_MS),
+    maxAttempts: 1,
   });
+}
+
+export function getCandidateExtractionTimeoutMs(value?: string) {
+  const parsed = Number(value ?? 35_000);
+  const timeout = Number.isFinite(parsed) ? parsed : 35_000;
+  return Math.max(15_000, Math.min(60_000, Math.round(timeout)));
 }
 
 export function scoreCandidateFit(payload: unknown) {
@@ -122,6 +132,7 @@ export function draftOutreach(payload: unknown) {
 export function designTrialTask(payload: unknown) {
   return run<{
     instructions: string;
+    usedDefaultRubric: boolean;
     rubric: {
       criteria: Array<{
         name: string;
@@ -139,12 +150,14 @@ export function designTrialTask(payload: unknown) {
   });
 }
 
-export function draftMarketingCampaign(payload: unknown) {
+export function draftMarketingCampaign(payload: unknown, options?: { timeoutMs?: number; maxAttempts?: number }) {
   return run<MarketingCampaignOutput>({
     taskName: "draft_marketing_campaign",
     systemPrompt: MARKETING_CAMPAIGN_PROMPT,
     userPayload: payload,
     schema: marketingCampaignOutputSchema,
+    timeoutMs: options?.timeoutMs,
+    maxAttempts: options?.maxAttempts,
   });
 }
 

@@ -3,7 +3,7 @@ import { AGENT_INTENTS, getAgentTaskTemplate, isAgentIntent } from "@/lib/agent-
 
 describe("agent task templates", () => {
   it("defines a deterministic plan for every supported intent", () => {
-    expect(AGENT_INTENTS).toHaveLength(9);
+    expect(AGENT_INTENTS).toHaveLength(10);
     for (const intent of AGENT_INTENTS) {
       const template = getAgentTaskTemplate(intent);
       expect(template.intent).toBe(intent);
@@ -16,6 +16,12 @@ describe("agent task templates", () => {
   it("keeps external search behind an explicit confirmation step", () => {
     expect(getAgentTaskTemplate("external_research").steps.map((step) => step.key)).toContain("confirm_external_search");
     expect(getAgentTaskTemplate("search_candidates").steps.map((step) => step.key)).toContain("confirm_external_search");
+    expect(getAgentTaskTemplate("enrich_candidate_evidence").steps.map((step) => step.key)).toEqual([
+      "check_project",
+      "confirm_external_search",
+      "enrich_candidate_evidence",
+      "quality_report",
+    ]);
     expect(getAgentTaskTemplate("full_sourcing").steps.map((step) => step.key)).toContain("confirm_external_search");
   });
 

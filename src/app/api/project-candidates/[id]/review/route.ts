@@ -1,45 +1,51 @@
 import { apiError, apiOk, handleRouteError } from "@/lib/http";
-import { stringifyJson } from "@/lib/json";
+import { buildCandidateReviewUpdate } from "@/lib/candidate-review";
 import { prisma } from "@/lib/prisma";
 import { serializeCandidate } from "@/lib/serializers";
-import { canTransitionCandidateStage } from "@/lib/state-machines";
 import { writeAuditEvent } from "@/lib/audit";
 import { z } from "zod";
 
-const reviewSchema = z.object({
-  decision: z.enum(["approved", "needs_more_evidence"]),
-  note: z.string().trim().max(1000).optional().default(""),
-});
+const reviewSchema = z
+  .object({
+    decision: z.enum(["approved", "needs_more_evidence", "rejected"]),
+    note: z.string().trim().max(1000).optional().default(""),
+  })
+  .superRefine((payload, context) => {
+    if (payload.decision === "rejected" && payload.note.length < 3) {
+      context.addIssue({ code: "custom", path: ["note"], message: "请填写本项目暂不推进的原因。" });
+    }
+    if (payload.decision === "needs_more_evidence" && payload.note.length < 3) {
+      context.addIssue({ code: "custom", path: ["note"], message: "请说明需要补充哪些证据。" });
+    }
+  });
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-    const payload = reviewSchema.parse(await request.json().catch(() => ({})));
+    const parsed = reviewSchema.safeParse(await request.json().catch(() => ({})));
+    if (!parsed.success) {
+      return apiError(parsed.error.issues[0]?.message ?? "请选择有效的复核结论。", 422);
+    }
+    const payload = parsed.data;
     const candidate = await prisma.projectCandidate.findUnique({
       where: { id },
       include: { expert: true, evidenceItems: true, outreachDrafts: true, trialTasks: true },
     });
-    if (!candidate) return apiError("Candidate not found.", 404);
+    if (!candidate) return apiError("未找到该候选。", 404);
 
     if (candidate.stage === "do_not_contact") {
-      return apiError("Candidate is marked do not contact.", 409);
+      return apiError("该候选已标记为不再联系，不能修改复核结论。", 409);
     }
 
-    const nextStage = nextReviewedStage(candidate.stage);
+    const update = buildCandidateReviewUpdate({
+      decision: payload.decision,
+      note: payload.note,
+      currentStage: candidate.stage,
+      missingJson: candidate.missingJson,
+    });
     const updated = await prisma.projectCandidate.update({
       where: { id },
-      data:
-        payload.decision === "approved"
-          ? {
-              humanReviewNeeded: false,
-              stage: nextStage,
-              nextAction: "联系路径确认后生成触达草稿。",
-            }
-          : {
-              humanReviewNeeded: true,
-              missingJson: stringifyJson(appendMissingEvidence(candidate.missingJson, payload.note)),
-              nextAction: payload.note ? `补证据：${payload.note}` : "补充证据后再次复核。",
-            },
+      data: update,
       include: { expert: true, evidenceItems: true, outreachDrafts: true, trialTasks: true },
     });
 
@@ -59,26 +65,5 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     return apiOk({ candidate: serializeCandidate(updated) });
   } catch (error) {
     return handleRouteError(error);
-  }
-}
-
-function nextReviewedStage(stage: string) {
-  if (stage === "verified" || stage === "approved_for_outreach" || stage === "contacted") return stage;
-  if (canTransitionCandidateStage(stage, "verified").ok) return "verified";
-  return stage;
-}
-
-function appendMissingEvidence(existingJson: string, note: string) {
-  const existing = safeStringArray(existingJson);
-  if (!note) return existing;
-  return Array.from(new Set([...existing, note]));
-}
-
-function safeStringArray(json: string) {
-  try {
-    const parsed = JSON.parse(json);
-    return Array.isArray(parsed) ? parsed.map((item) => String(item)).filter(Boolean) : [];
-  } catch {
-    return [];
   }
 }

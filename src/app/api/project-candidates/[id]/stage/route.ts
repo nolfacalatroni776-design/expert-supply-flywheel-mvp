@@ -7,6 +7,7 @@ import { writeAuditEvent } from "@/lib/audit";
 import { canTransitionCandidateStage } from "@/lib/state-machines";
 import { recordExpertQualityEvent } from "@/lib/supply-flywheel";
 import { z } from "zod";
+import { validateOnboardingApproval } from "@/lib/trial-approval";
 
 const stageUpdateSchema = z.object({
   stage: pipelineStageSchema,
@@ -22,7 +23,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
     const candidate = await prisma.projectCandidate.findUnique({
       where: { id },
-      include: { expert: true, project: true },
+      include: { expert: true, project: true, trialTasks: { orderBy: { createdAt: "desc" }, take: 1 } },
     });
     if (!candidate) return apiError("Candidate not found.", 404);
 
@@ -43,6 +44,23 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       if (!gate.ok) return apiError(gate.reason, 409);
     }
 
+    if (parsed.data.stage === "onboarded") {
+      const approval = validateOnboardingApproval({
+        latestTrialOutcome: candidate.trialTasks[0]?.outcome,
+        reason: parsed.data.reason,
+      });
+      if (!approval.ok) {
+        await writeAuditEvent({
+          projectId: candidate.projectId,
+          entityType: "candidate",
+          entityId: candidate.id,
+          action: "candidate.stage.rejected",
+          payload: { from: candidate.stage, to: parsed.data.stage, reason: approval.reason },
+        });
+        return apiError(approval.reason, 409);
+      }
+    }
+
     const updated = await prisma.$transaction(async (tx) => {
       if (parsed.data.stage === "do_not_contact" && parsed.data.scope === "global") {
         await tx.expert.update({
@@ -53,7 +71,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
       return tx.projectCandidate.update({
         where: { id },
-        data: { stage: parsed.data.stage, nextAction: parsed.data.reason || candidate.nextAction },
+        data: {
+          stage: parsed.data.stage,
+          nextAction: parsed.data.reason || candidate.nextAction,
+          humanReviewNeeded: parsed.data.stage === "onboarded" ? false : candidate.humanReviewNeeded,
+        },
         include: { expert: true, evidenceItems: true, outreachDrafts: true, trialTasks: true },
       });
     });

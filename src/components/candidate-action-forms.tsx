@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { CheckCircle2, Loader2, MailCheck, Save, ShieldOff } from "lucide-react";
+import { CheckCircle2, ClipboardCheck, Loader2, MailCheck, Save, ShieldOff } from "lucide-react";
 import clsx from "clsx";
+import { MANUAL_OUTREACH_ACTION_LABEL, MANUAL_OUTREACH_SUCCESS_MESSAGE } from "@/lib/outreach-status";
 
 type ContactPermissionFormProps = {
   expertId: string;
@@ -24,6 +25,11 @@ type DncFormProps = {
 };
 
 type TrialResultFormProps = {
+  candidateId: string;
+  disabled?: boolean;
+};
+
+type TrialStartFormProps = {
   candidateId: string;
   disabled?: boolean;
 };
@@ -130,6 +136,10 @@ export function CandidateReviewForm({ candidateId, disabled }: CandidateReviewFo
           setMessage({ type: "error", text: "请补充需要哪些证据。" });
           return;
         }
+        if (selectedDecision === "rejected" && note.length < 3) {
+          setMessage({ type: "error", text: "请填写本项目暂不推进的原因。" });
+          return;
+        }
         startTransition(async () => {
           await submitJson({
             endpoint: `/api/project-candidates/${candidateId}/review`,
@@ -148,8 +158,22 @@ export function CandidateReviewForm({ candidateId, disabled }: CandidateReviewFo
         <option value="">选择复核结论</option>
         <option value="approved">通过复核</option>
         <option value="needs_more_evidence">需要补证据</option>
+        <option value="rejected">本项目暂不推进</option>
       </select>
-      <textarea name="note" placeholder={decision === "needs_more_evidence" ? "说明需要补充哪些证据" : "复核备注"} disabled={disabled || isPending} className={textareaClass} />
+      <textarea
+        name="note"
+        placeholder={
+          decision === "needs_more_evidence"
+            ? "说明需要补充哪些证据"
+            : decision === "rejected"
+              ? "填写暂不推进的具体原因"
+              : "复核备注"
+        }
+        required={decision === "needs_more_evidence" || decision === "rejected"}
+        minLength={decision === "needs_more_evidence" || decision === "rejected" ? 3 : undefined}
+        disabled={disabled || isPending}
+        className={textareaClass}
+      />
       <SubmitRow icon={CheckCircle2} label="保存复核" pending={isPending} disabled={disabled} message={message} />
     </form>
   );
@@ -240,6 +264,57 @@ export function TrialResultForm({ candidateId, disabled }: TrialResultFormProps)
   );
 }
 
+export function TrialStartForm({ candidateId, disabled }: TrialStartFormProps) {
+  const [isPending, startTransition] = useTransition();
+  const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
+
+  return (
+    <form
+      className="mt-3 grid gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        setMessage(null);
+        const formData = new FormData(event.currentTarget);
+        startTransition(async () => {
+          await submitJson({
+            endpoint: `/api/project-candidates/${candidateId}/trial-start`,
+            method: "POST",
+            body: {
+              samplesDeidentified: formData.get("samplesDeidentified") === "on",
+              guidanceAttached: formData.get("guidanceAttached") === "on",
+              goldAnswersValidated: formData.get("goldAnswersValidated") === "on",
+              approvalNote: formData.get("approvalNote"),
+            },
+            onMessage: setMessage,
+            success: "试标已开始，可以记录提交结果。",
+          });
+        });
+      }}
+    >
+      <p className="text-sm font-semibold text-amber-900">开始试标前确认</p>
+      {[
+        ["samplesDeidentified", "试标样本已完成脱敏"],
+        ["guidanceAttached", "任务指引已附上"],
+        ["goldAnswersValidated", "标准答案已经内部校验"],
+      ].map(([name, label]) => (
+        <label key={name} className="flex items-start gap-2 text-sm leading-5 text-[#4d473e]">
+          <input name={name} type="checkbox" required disabled={disabled || isPending} className="mt-1 size-4" />
+          <span>{label}</span>
+        </label>
+      ))}
+      <textarea
+        name="approvalNote"
+        required
+        minLength={3}
+        placeholder="填写材料复核说明"
+        disabled={disabled || isPending}
+        className={textareaClass}
+      />
+      <SubmitRow icon={ClipboardCheck} label="确认开始试标" pending={isPending} disabled={disabled} message={message} />
+    </form>
+  );
+}
+
 export function DraftStatusButton({ draftId, disabled }: DraftStatusButtonProps) {
   const [isPending, startTransition] = useTransition();
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
@@ -257,14 +332,14 @@ export function DraftStatusButton({ draftId, disabled }: DraftStatusButtonProps)
               method: "PATCH",
               body: { status: "sent" },
               onMessage: setMessage,
-              success: "已记录发送状态。",
+              success: MANUAL_OUTREACH_SUCCESS_MESSAGE,
             });
           });
         }}
         className="inline-flex h-9 items-center gap-2 rounded-lg border border-[#e7e7e2] bg-white px-3 text-sm font-semibold text-[#28251e] transition hover:bg-[#f9f9f9] disabled:cursor-not-allowed disabled:opacity-50"
       >
         {isPending ? <Loader2 className="size-4 animate-spin" /> : <MailCheck className="size-4" />}
-        {isPending ? "保存中" : "记录已发送"}
+        {isPending ? "保存中" : MANUAL_OUTREACH_ACTION_LABEL}
       </button>
       {message ? <Message message={message} /> : null}
     </div>
