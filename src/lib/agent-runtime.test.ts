@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assessInternalSupplyAvailability,
   buildRankSupplyStepOutput,
   buildSearchQueryBase,
   getApprovedExternalSearchQueries,
@@ -77,6 +78,17 @@ describe("external search base", () => {
 });
 
 describe("agent runtime state guards", () => {
+  it("keeps full sourcing available when the internal expert library is empty", () => {
+    expect(assessInternalSupplyAvailability("full_sourcing", 0)).toEqual({
+      missing: [],
+      warnings: ["专家库暂无可召回的内部或推荐专家，将继续分析缺口并在确认后补充公开候选。"],
+    });
+    expect(assessInternalSupplyAvailability("internal_match", 0)).toEqual({
+      missing: ["专家库暂无可召回的内部或推荐专家。"],
+      warnings: [],
+    });
+  });
+
   it("allows only known task intents", () => {
     expect(normalizeAgentIntent("generate_marketing")).toBe("generate_marketing");
     expect(normalizeAgentIntent("unknown")).toBeNull();

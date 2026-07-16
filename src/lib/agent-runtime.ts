@@ -1428,9 +1428,9 @@ async function buildPreflight(intent: string, project: Project & { candidates: u
   if (rawDemandLength < 8) missing.push("项目需求太短，请补充任务目标和专家要求。");
   if (!project.quantity || project.quantity <= 0) warnings.push("目标专家数量未填写，系统会按当前数据保守执行。");
   if (requiresProjectReview(project)) needsReview.push("高风险或强监管项目需人工复核后再触达。");
-  if ((intent === "internal_match" || intent === "full_sourcing") && internalExperts === 0) {
-    missing.push("专家库暂无可召回的内部或推荐专家。");
-  }
+  const internalSupplyAvailability = assessInternalSupplyAvailability(intent, internalExperts);
+  missing.push(...internalSupplyAvailability.missing);
+  warnings.push(...internalSupplyAvailability.warnings);
   if ((intent === "search_candidates" || intent === "external_research") && !searchQueries.length && !project.supplyGaps.length) {
     missing.push("请先补齐需求画像或供给缺口，再补充公开候选。");
   }
@@ -1468,6 +1468,20 @@ async function buildPreflight(intent: string, project: Project & { candidates: u
       nextActions: missing.length ? ["补齐前置条件后重新提交任务。"] : ["开始执行任务。"],
     },
   };
+}
+
+export function assessInternalSupplyAvailability(intent: string, internalExperts: number) {
+  if (internalExperts > 0) return { missing: [], warnings: [] };
+  if (intent === "internal_match") {
+    return { missing: ["专家库暂无可召回的内部或推荐专家。"], warnings: [] };
+  }
+  if (intent === "full_sourcing") {
+    return {
+      missing: [],
+      warnings: ["专家库暂无可召回的内部或推荐专家，将继续分析缺口并在确认后补充公开候选。"],
+    };
+  }
+  return { missing: [], warnings: [] };
 }
 
 async function buildContextSnapshot(project: Project & { candidates: unknown[]; marketingPosts: unknown[]; supplyGaps: unknown[] }) {
