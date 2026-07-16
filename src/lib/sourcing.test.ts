@@ -10,6 +10,7 @@ import {
   requiresSourcedCandidateReview,
   resolveCandidateExtraction,
   selectResultsForCandidateExtraction,
+  shouldBypassSearchCache,
   shouldUseCachedSearch,
 } from "@/lib/sourcing";
 
@@ -129,6 +130,14 @@ describe("external candidate review fields", () => {
 });
 
 describe("search cache compatibility", () => {
+  it("only bypasses cache for an explicit server-side verification flag", () => {
+    expect(shouldBypassSearchCache("1")).toBe(true);
+    expect(shouldBypassSearchCache("true")).toBe(true);
+    expect(shouldBypassSearchCache("TRUE")).toBe(true);
+    expect(shouldBypassSearchCache("0")).toBe(false);
+    expect(shouldBypassSearchCache(undefined)).toBe(false);
+  });
+
   it("invalidates generic web cache for an explicit GitHub people search", () => {
     expect(shouldUseCachedSearch("Python FastAPI GitHub maintainer", "serper")).toBe(false);
     expect(shouldUseCachedSearch("Python FastAPI GitHub maintainer", "github")).toBe(false);
@@ -182,9 +191,23 @@ describe("evidence idempotency", () => {
       sourceType: "public_web",
       claim: "Conference speaker",
     });
+    const reviewClaim = buildEvidenceDedupeKey({
+      candidateId: "candidate-1",
+      sourceUrl: "https://github.com/tiangolo",
+      sourceType: "github_api",
+      claim: "GitHub 公开代码评审记录与项目要求的技术仓库相关",
+    });
+    const repeatedReviewClaim = buildEvidenceDedupeKey({
+      candidateId: "candidate-1",
+      sourceUrl: "https://github.com/tiangolo/",
+      sourceType: "github_api",
+      claim: "Verified PR review activity",
+    });
 
     expect(repeated).toBe(first);
     expect(publicClaim).not.toBe(first);
+    expect(reviewClaim).not.toBe(first);
+    expect(repeatedReviewClaim).toBe(reviewClaim);
   });
 });
 
@@ -319,6 +342,36 @@ describe("buildFallbackCandidatesFromSearchResults", () => {
     expect(candidates[0].claims[0].sourceType).toBe("github_api");
     expect(candidates[0].lastActiveAt).toBe(RECENT_GITHUB_ACTIVITY);
     expect(candidates[0].risks.join(" ")).not.toContain("近期活跃");
+  });
+
+  it("preserves a directly verified GitHub PR review as a separate evidence claim", () => {
+    const candidates = buildFallbackCandidatesFromSearchResults(
+      {
+        domain: "Python FastAPI 后端",
+        rawDemand: "需要 FastAPI 维护者完成代码评审。",
+        languagesJson: "[]",
+        regionsJson: "[]",
+      },
+      [
+        {
+          title: "Ada FastAPI GitHub profile",
+          url: "https://github.com/ada-fastapi",
+          snippet:
+            `Repository evidence: 240 contributions to fastapi/fastapi (90000 stars). Code review evidence: reviewed 17 pull requests in fastapi/fastapi. Example review: https://github.com/fastapi/fastapi/pull/1234. Recent public activity: ${RECENT_GITHUB_ACTIVITY}.`,
+          domain: "github.com",
+        },
+      ],
+    );
+
+    expect(candidates[0].claims).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          claim: "GitHub 公开代码评审记录与项目要求的技术仓库相关",
+          sourceType: "github_api",
+          evidenceLevel: "E2",
+        }),
+      ]),
+    );
   });
 
   it("rejects GitHub contribution evidence when the repository is unrelated to the project", () => {

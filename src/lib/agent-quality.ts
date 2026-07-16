@@ -117,13 +117,17 @@ export function buildAgentRunReport({
   const written = steps
     .filter((step) => hasWrittenData(step.output))
     .map((step) => summarizeWrittenData(step.label, step.output));
+  const latestExternalAcceptance = readLatestExternalAcceptance(steps);
   const needsReview = steps
     .filter((step) => status === "waiting_for_confirmation" || step.stepKey !== "confirm_external_search")
     .flatMap((step) => {
     const outputReview = readStringArray(step.output?.needsReview);
     const checkReview = readStringArray(step.checks?.needsReview);
     return [...outputReview, ...checkReview];
-  }).map(normalizeAgentUserFacingText).filter(Boolean);
+  })
+    .map(normalizeAgentUserFacingText)
+    .filter(Boolean)
+    .filter((item) => !isResolvedReviewWarning(item, latestExternalAcceptance));
   const nextActions =
     status === "waiting_for_confirmation"
       ? ["确认是否继续调用外部搜索。"]
@@ -157,6 +161,35 @@ export function buildAgentRunReport({
     needsReview: Array.from(new Set(needsReview)),
     nextActions: nextActions.length ? Array.from(new Set(nextActions)) : defaultNextActions(status),
   };
+}
+
+function readLatestExternalAcceptance(steps: AgentStepSnapshot[]) {
+  const step = [...steps]
+    .reverse()
+    .find(
+      (item) =>
+        ["external_research", "search_candidates", "enrich_candidate_evidence"].includes(item.stepKey) &&
+        item.output?.acceptance &&
+        typeof item.output.acceptance === "object" &&
+        !Array.isArray(item.output.acceptance),
+    );
+  return (step?.output?.acceptance as Record<string, unknown> | undefined) ?? null;
+}
+
+function isResolvedReviewWarning(value: string, acceptance: Record<string, unknown> | null) {
+  if (!acceptance || acceptance.passed !== true) return false;
+  const e2PlusCandidates = readFiniteNumber(acceptance.e2PlusCandidates);
+  const hardRequirementReadyCandidates = readFiniteNumber(acceptance.hardRequirementReadyCandidates);
+  const earlierE2Count = value.match(/E2\+\s*证据候选只有\s*(\d+)\s*位/i)?.[1];
+  if (earlierE2Count && e2PlusCandidates > Number(earlierE2Count)) return true;
+  if (/高证据候选不足/.test(value) && e2PlusCandidates > 0) return true;
+  if (/没有候选同时满足高证据和/.test(value) && hardRequirementReadyCandidates > 0) return true;
+  return false;
+}
+
+function readFiniteNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function summarizeWrittenData(label: string, output?: Record<string, unknown>) {

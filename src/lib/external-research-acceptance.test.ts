@@ -560,7 +560,7 @@ describe("evaluateExternalResearchAcceptance", () => {
     expect(report.passed).toBe(false);
   });
 
-  it("marks the run incomplete when an explicitly searched source produced no candidate", () => {
+  it("reports an unproductive search direction without treating it as a hard blocker", () => {
     const report = evaluateExternalResearchAcceptance({
       project: {
         title: "Kubernetes eBPF 专家招募",
@@ -600,8 +600,10 @@ describe("evaluateExternalResearchAcceptance", () => {
     expect(report.passed).toBe(false);
     expect(report.candidateSourceCoverage).toEqual(["community"]);
     expect(report.unmetSourceCoverage).toEqual(["conference", "publication"]);
-    expect(report.blockers).toContain("会议讲者方向未产出可复核候选。");
-    expect(report.blockers).toContain("论文作者方向未产出可复核候选。");
+    expect(report.blockers).not.toContain("会议讲者方向未产出可复核候选。");
+    expect(report.blockers).not.toContain("论文作者方向未产出可复核候选。");
+    expect(report.needsReview).toContain("会议讲者方向未产出可复核候选。");
+    expect(report.needsReview).toContain("论文作者方向未产出可复核候选。");
     expect(report.nextActions.join(" ")).toContain("调整未产出候选的来源搜索词");
   });
 
@@ -636,7 +638,74 @@ describe("evaluateExternalResearchAcceptance", () => {
 
     expect(report.candidateSourceCoverage).toContain("conference");
     expect(report.unmetSourceCoverage).toContain("publication");
-    expect(report.blockers).toContain("论文作者方向未产出可复核候选。");
+    expect(report.blockers).not.toContain("论文作者方向未产出可复核候选。");
+    expect(report.needsReview).toContain("论文作者方向未产出可复核候选。");
+  });
+
+  it("passes when enough candidates meet hard requirements even if exploratory sources have no candidate", () => {
+    const candidates = ["ada", "grace", "linus"].map((login) => ({
+      expert: { evidenceLevel: "E2", sourceUrl: `https://github.com/${login}` },
+      humanReviewNeeded: true,
+      sourceType: "external",
+      evidenceItems: [
+        {
+          sourceType: "github_api",
+          sourceUrl: `https://github.com/${login}`,
+          sourceTitle: `${login} GitHub profile`,
+          claim: "GitHub 公开贡献记录与项目技术相关",
+          snippet:
+            "Repository evidence: 120 contributions to example/relevant-project. Code review evidence: reviewed 12 pull requests in example/relevant-project. Example review: https://github.com/example/relevant-project/pull/12.",
+        },
+      ],
+    }));
+    const report = evaluateExternalResearchAcceptance({
+      project: {
+        title: "开源维护者招募",
+        rawDemand: "招募 3 位 Python 维护者，要求有代码评审经历并提供与目标仓库相关的 GitHub 实质贡献。",
+        domain: "Python",
+        riskLevel: "medium",
+        quantity: 3,
+        personaJson: JSON.stringify({
+          mustHave: ["代码评审经历"],
+          evidenceRequirements: ["GitHub 实质贡献"],
+        }),
+      },
+      queries: ["Python GitHub maintainer", "Python conference speaker", "Python paper author"],
+      cacheHits: [],
+      providerStats: { github: 3, openalex: 8, serper: 8 },
+      searchResults: [
+        ...candidates.map((candidate) => ({
+          title: candidate.evidenceItems[0].sourceTitle,
+          url: candidate.expert.sourceUrl,
+          snippet: candidate.evidenceItems[0].snippet,
+          domain: "github.com",
+          query: "Python GitHub maintainer",
+        })),
+        {
+          title: "Python conference recap",
+          url: "https://conference.example/recap",
+          snippet: "No named speaker profile.",
+          query: "Python conference speaker",
+        },
+        {
+          title: "Python paper",
+          url: "https://openalex.org/W1",
+          snippet: "No author profile extracted.",
+          query: "Python paper author",
+        },
+      ],
+      candidates,
+    });
+
+    expect(report.hardRequirementReadyCandidates).toBe(3);
+    expect(report.passed).toBe(true);
+    expect(report.unmetSourceCoverage).toEqual(["conference", "publication"]);
+    expect(report.needsReview).toEqual(
+      expect.arrayContaining([
+        "会议讲者方向未产出可复核候选。",
+        "论文作者方向未产出可复核候选。",
+      ]),
+    );
   });
 
   it("classifies a speaker page by its actual content instead of the query that happened to return it", () => {

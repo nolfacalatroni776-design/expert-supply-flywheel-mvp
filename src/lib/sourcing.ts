@@ -87,7 +87,9 @@ function fallbackProviders() {
 }
 
 async function searchWithCacheAndFallback(query: string): Promise<SearchProviderResult> {
-  const cached = await prisma.searchCache.findUnique({ where: { query } });
+  const cached = shouldBypassSearchCache()
+    ? null
+    : await prisma.searchCache.findUnique({ where: { query } });
   if (cached && cached.expiresAt > new Date() && shouldUseCachedSearch(query, cached.provider)) {
     return {
       provider: "cache",
@@ -148,6 +150,10 @@ async function searchWithCacheAndFallback(query: string): Promise<SearchProvider
 
     throw error;
   }
+}
+
+export function shouldBypassSearchCache(value = process.env.SEARCH_CACHE_BYPASS) {
+  return ["1", "true"].includes(value?.trim().toLowerCase() ?? "");
 }
 
 export function shouldUseCachedSearch(query: string, provider: string) {
@@ -319,7 +325,22 @@ async function persistExtractedCandidates(
         },
         orderBy: { createdAt: "asc" },
       });
-      const existing = existingMatches[0];
+      const evidenceKey = buildEvidenceDedupeKey({
+        candidateId: relation.id,
+        sourceUrl: claim.sourceUrl,
+        sourceType: claim.sourceType,
+        claim: claim.claim,
+      });
+      const matchingExisting = existingMatches.filter(
+        (item) =>
+          buildEvidenceDedupeKey({
+            candidateId: relation.id,
+            sourceUrl: item.sourceUrl,
+            sourceType: item.sourceType,
+            claim: item.claim,
+          }) === evidenceKey,
+      );
+      const existing = matchingExisting[0];
 
       if (existing) {
         await prisma.evidenceItem.update({
@@ -333,9 +354,9 @@ async function persistExtractedCandidates(
             confidence: claim.confidence,
           },
         });
-        if (authoritativeGitHubEvidence && existingMatches.length > 1) {
+        if (authoritativeGitHubEvidence && matchingExisting.length > 1) {
           await prisma.evidenceItem.deleteMany({
-            where: { id: { in: existingMatches.slice(1).map((item) => item.id) } },
+            where: { id: { in: matchingExisting.slice(1).map((item) => item.id) } },
           });
         }
       } else {
@@ -1084,37 +1105,39 @@ function upgradeCandidateEvidence(
     risks.push("GitHub 公开贡献记录未提供近期活跃证据，需人工确认当前活跃度。");
   }
   const hasMatchingClaim = supportedClaims.some((claim) => normalizeUrl(claim.sourceUrl) === normalizeUrl(matchingResult.url));
+  const contributionClaims = hasMatchingClaim
+    ? supportedClaims.map((claim) =>
+        normalizeUrl(claim.sourceUrl) === normalizeUrl(matchingResult.url)
+          ? {
+              ...claim,
+              claim: "GitHub 公开贡献记录与目标技术相关",
+              sourceTitle: matchingResult.title,
+              sourceType: "github_api",
+              snippet: matchingResult.snippet,
+              evidenceLevel,
+              confidence: Math.max(claim.confidence, 0.9),
+            }
+          : claim,
+      )
+    : [
+        ...supportedClaims,
+        {
+          claim: "GitHub 公开贡献记录与目标技术相关",
+          sourceUrl: matchingResult.url,
+          sourceTitle: matchingResult.title,
+          sourceType: "github_api",
+          snippet: matchingResult.snippet,
+          evidenceLevel: "E2" as const,
+          confidence: 0.9,
+        },
+      ];
+  const reviewClaim = buildGitHubReviewClaim(matchingResult, evidenceLevel);
   return {
     ...candidate,
     lastActiveAt,
     risks,
     evidenceLevel,
-    claims: hasMatchingClaim
-      ? supportedClaims.map((claim) =>
-          normalizeUrl(claim.sourceUrl) === normalizeUrl(matchingResult.url)
-            ? {
-                ...claim,
-                claim: "GitHub 公开贡献记录与目标技术相关",
-                sourceTitle: matchingResult.title,
-                sourceType: "github_api",
-                snippet: matchingResult.snippet,
-                evidenceLevel,
-                confidence: Math.max(claim.confidence, 0.9),
-              }
-            : claim,
-        )
-      : [
-          ...supportedClaims,
-          {
-            claim: "GitHub 公开贡献记录与目标技术相关",
-            sourceUrl: matchingResult.url,
-            sourceTitle: matchingResult.title,
-            sourceType: "github_api",
-            snippet: matchingResult.snippet,
-            evidenceLevel: "E2" as const,
-            confidence: 0.9,
-          },
-        ],
+    claims: reviewClaim ? [...contributionClaims, reviewClaim] : contributionClaims,
   };
 }
 
@@ -1216,6 +1239,11 @@ export function buildFallbackCandidatesFromSearchResults(
             evidenceLevel,
             confidence: authoritativeGitHubEvidence ? 0.9 : 0.35,
           },
+          ...(authoritativeGitHubEvidence
+            ? [buildGitHubReviewClaim(result, evidenceLevel)].filter(
+                (claim): claim is NonNullable<typeof claim> => Boolean(claim),
+              )
+            : []),
         ],
       };
     });
@@ -1330,6 +1358,32 @@ function hasAuthoritativeGitHubContributionEvidence(result: { url: string; snipp
   );
 }
 
+function buildGitHubReviewClaim(
+  result: { title: string; url: string; snippet: string },
+  evidenceLevel: "E1" | "E2",
+) {
+  if (!hasAuthoritativeGitHubReviewEvidence(result)) return null;
+  return {
+    claim: "GitHub 公开代码评审记录与项目要求的技术仓库相关",
+    sourceUrl: result.url,
+    sourceTitle: result.title,
+    sourceType: "github_api",
+    snippet: result.snippet,
+    evidenceLevel,
+    confidence: 0.95,
+  };
+}
+
+function hasAuthoritativeGitHubReviewEvidence(result: { url: string; snippet: string }) {
+  return (
+    isLikelyGitHubUserUrl(result.url) &&
+    /Code review evidence:\s*reviewed\s+\d+\s+pull requests?\s+in\s+[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\./i.test(
+      result.snippet,
+    ) &&
+    /Example review:\s*https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+/i.test(result.snippet)
+  );
+}
+
 function extractGitHubRecentActivity(snippet: string) {
   const match = snippet.match(
     /(?:Recent public activity|Profile updated):\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))/i,
@@ -1387,7 +1441,15 @@ export function buildEvidenceDedupeKey(input: {
   claim: string;
 }) {
   const sourceKey = `${input.candidateId}|${normalizeUrl(input.sourceUrl)}|${input.sourceType}`;
-  return input.sourceType === "github_api" ? sourceKey : `${sourceKey}|${input.claim.trim().toLowerCase()}`;
+  return input.sourceType === "github_api"
+    ? `${sourceKey}|${githubEvidenceKind(input.claim)}`
+    : `${sourceKey}|${input.claim.trim().toLowerCase()}`;
+}
+
+function githubEvidenceKind(claim: string) {
+  return /代码评审|代码审查|pull\s+requests?|\bpr\s+review|review\s+activity/i.test(claim)
+    ? "review"
+    : "contribution";
 }
 
 function evidenceLevelRank(level: string) {

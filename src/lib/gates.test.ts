@@ -64,12 +64,20 @@ describe("canApproveForOutreach", () => {
     expect(result).toEqual({ ok: false, reason: "该候选需完成人工复核后才能生成触达草稿。" });
   });
 
-  it("blocks candidates below the outreach score threshold", () => {
+  it("allows a low-scoring candidate after explicit human verification", () => {
     const result = canApproveForOutreach({
       candidate: { ...baseCandidate, fitScore: 74 },
       expert: baseExpert,
     });
-    expect(result).toEqual({ ok: false, reason: "匹配评分需达到 75 分后才能生成触达草稿。" });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("keeps a low-scoring candidate behind review before verification", () => {
+    const result = canApproveForOutreach({
+      candidate: { ...baseCandidate, fitScore: 74, stage: "sourced" },
+      expert: baseExpert,
+    });
+    expect(result).toEqual({ ok: false, reason: "匹配评分低于 75 分，需人工复核通过后才能生成触达草稿。" });
   });
 
   it("blocks candidates without a score", () => {
@@ -77,7 +85,7 @@ describe("canApproveForOutreach", () => {
       candidate: { ...baseCandidate, fitScore: null },
       expert: baseExpert,
     });
-    expect(result).toEqual({ ok: false, reason: "匹配评分需达到 75 分后才能生成触达草稿。" });
+    expect(result).toEqual({ ok: false, reason: "请先完成匹配评分，再生成触达草稿。" });
   });
 
   it("blocks low evidence candidates", () => {

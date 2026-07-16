@@ -156,4 +156,41 @@ describe("agent quality report", () => {
     ]);
     expect(report.needsReview).not.toContain("确认后会调用外部搜索服务。");
   });
+
+  it("removes an early evidence-count warning after later search results resolve it", () => {
+    const report = buildAgentRunReport({
+      status: "succeeded",
+      steps: [
+        {
+          stepKey: "analyze_supply_gap",
+          label: "分析供给缺口",
+          status: "succeeded",
+          output: {
+            needsReview: [
+              "E2+ 证据候选只有 1 位，需要补充可核验来源。",
+              "内部库当前召回 1 位，距离目标 3 位仍有缺口。",
+            ],
+          },
+        },
+        {
+          stepKey: "external_research",
+          label: "补充公开候选",
+          status: "succeeded",
+          output: {
+            acceptance: {
+              passed: true,
+              e2PlusCandidates: 3,
+              hardRequirementReadyCandidates: 2,
+            },
+            needsReview: ["3 位候选需要人工复核。"],
+            nextActions: ["完成候选复核后再准备触达草稿。"],
+          },
+        },
+      ],
+    });
+
+    expect(report.needsReview).not.toContain("E2+ 证据候选只有 1 位，需要补充可核验来源。");
+    expect(report.needsReview).toContain("内部库当前召回 1 位，距离目标 3 位仍有缺口。");
+    expect(report.needsReview).toContain("3 位候选需要人工复核。");
+  });
 });

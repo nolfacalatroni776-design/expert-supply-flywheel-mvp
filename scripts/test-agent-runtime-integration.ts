@@ -572,7 +572,7 @@ async function testAtomicExecutionClaims(prisma: PrismaModule["prisma"], runtime
   });
   assert(run);
 
-  const now = new Date("2026-07-16T00:00:00.000Z");
+  const now = new Date();
   const claims = await Promise.all(
     Array.from({ length: 8 }, (_, index) => runtime.claimAgentTaskRunExecution(run.id, `claim-${index}`, now)),
   );
@@ -596,7 +596,7 @@ async function testAtomicExecutionClaims(prisma: PrismaModule["prisma"], runtime
   const recovered = await runtime.claimAgentTaskRunExecution(
     run.id,
     "recovery-owner",
-    new Date("2026-07-16T00:20:00.000Z"),
+    new Date(now.getTime() + 20 * 60 * 1000),
   );
   assert.equal(recovered.claimed, true, "An expired execution lease must be recoverable");
   const recoveredRun = await prisma.agentTaskRun.findUniqueOrThrow({ where: { id: run.id } });
@@ -945,7 +945,7 @@ async function testExternalResearchUsesApprovedPlanAndCreatesReviewOnlyLeads(
             title: `${name}${github ? " GitHub profile" : " expert profile"}`,
             url: github ? "https://github.com/ada-security-review" : `https://experts.example.com/security-${index}`,
             snippet: github
-              ? `Open-source Rust security maintainer. Repository evidence: 120 contributions to rust-lang/rust (100000 stars). Recent public activity: ${new Date().toISOString()}.`
+              ? `Open-source Rust security maintainer. Repository evidence: 120 contributions to rust-lang/rust (100000 stars). Code review evidence: reviewed 12 pull requests in rust-lang/rust. Example review: https://github.com/rust-lang/rust/pull/12345. Recent public activity: ${new Date().toISOString()}.`
               : `${name} is a named Python and Rust security audit expert with a public profile for this source direction.`,
             domain: github ? "github.com" : "experts.example.com",
             position: 1,
@@ -972,8 +972,8 @@ async function testExternalResearchUsesApprovedPlanAndCreatesReviewOnlyLeads(
   assert(completed, "Confirmed external research run should complete from cached results");
   assert.equal(
     completed.status,
-    "partially_succeeded",
-    "Review-only leads must remain visible without reporting a quality-gate pass",
+    "succeeded",
+    "A search can succeed while its candidates remain behind human-review and outreach gates",
   );
 
   const confirmedStep = completed.steps.find((step) => step.stepKey === "confirm_external_search");
@@ -984,7 +984,7 @@ async function testExternalResearchUsesApprovedPlanAndCreatesReviewOnlyLeads(
     orderBy: { createdAt: "desc" },
   });
   assert.deepEqual(JSON.parse(searchRun.queriesJson), queryPreview, "Execution must use exactly the approved queries");
-  assert.equal(searchRun.status, "quality_failed");
+  assert.equal(searchRun.status, "completed");
   assert.equal(
     await prisma.searchResultOccurrence.count({ where: { searchRunId: searchRun.id } }),
     queryPreview.length + 1,
@@ -1005,9 +1005,19 @@ async function testExternalResearchUsesApprovedPlanAndCreatesReviewOnlyLeads(
   assert.equal(candidate.humanReviewNeeded, true);
   assert.equal(candidate.stage, "sourced");
   assert.equal(gates.canApproveForOutreach({ project, candidate, expert: candidate.expert }).ok, false);
+  const githubEvidence = await prisma.evidenceItem.findMany({
+    where: { candidateId: candidate.id, sourceType: "github_api" },
+    orderBy: { createdAt: "asc" },
+  });
+  assert.equal(githubEvidence.length, 2, "GitHub contribution and PR-review facts must remain separate");
+  assert(
+    githubEvidence.some((evidence) => evidence.claim.includes("贡献")) &&
+      githubEvidence.some((evidence) => evidence.claim.includes("代码评审")),
+    "The candidate record must expose both verified GitHub evidence types",
+  );
 
   const researchStep = completed.steps.find((step) => step.stepKey === "external_research");
-  assert.equal(researchStep?.status, "failed");
+  assert.equal(researchStep?.status, "succeeded");
   assert.equal(
     researchStep?.toolReceipts.length,
     queryPreview.length,
@@ -1029,8 +1039,16 @@ async function testExternalResearchUsesApprovedPlanAndCreatesReviewOnlyLeads(
       ? (acceptance as { blockers?: unknown }).blockers
       : null;
   assert(
-    Array.isArray(blockers) && blockers.length > 0,
-    "A partial search run must explain which quality gates remain unmet",
+    Array.isArray(blockers) && blockers.length === 0,
+    "A usable review-only candidate batch must not be mislabeled as a failed search",
+  );
+  const needsReview =
+    acceptance && typeof acceptance === "object" && !Array.isArray(acceptance)
+      ? (acceptance as { needsReview?: unknown }).needsReview
+      : null;
+  assert(
+    Array.isArray(needsReview) && needsReview.length > 0,
+    "Successful search output must still explain the remaining human-review work",
   );
   assert.equal(await prisma.auditEvent.count({ where: { projectId: project.id, action: "ai.extract_candidates.fallback" } }), 1);
 

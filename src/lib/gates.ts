@@ -9,6 +9,18 @@ const evidenceRank: Record<string, number> = {
   E4: 4,
 };
 
+const humanVerifiedStages = new Set([
+  "verified",
+  "approved_for_outreach",
+  "contacted",
+  "replied",
+  "screening",
+  "trial",
+  "contracting",
+  "onboarded",
+  "active",
+]);
+
 export function canApproveForOutreach({
   candidate,
   expert,
@@ -35,8 +47,12 @@ export function canApproveForOutreach({
     };
   }
 
-  if (candidate.fitScore === null || candidate.fitScore < 75) {
-    return { ok: false, reason: "匹配评分需达到 75 分后才能生成触达草稿。" };
+  if (candidate.fitScore === null) {
+    return { ok: false, reason: "请先完成匹配评分，再生成触达草稿。" };
+  }
+
+  if (candidate.fitScore < 75 && !humanVerifiedStages.has(candidate.stage)) {
+    return { ok: false, reason: "匹配评分低于 75 分，需人工复核通过后才能生成触达草稿。" };
   }
 
   if ((evidenceRank[expert.evidenceLevel] ?? 0) < 2) {

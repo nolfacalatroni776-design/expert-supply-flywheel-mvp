@@ -432,13 +432,24 @@ export function evaluateExternalResearchAcceptance({
     blockers.push(`没有候选同时满足高证据和${hardRequirements.map(formatCandidateHardRequirement).join("、")}硬条件。`);
   }
   if (!Object.keys(providerStats).length) blockers.push("来源服务结果缺失。");
-  sourceYield.unmet.forEach((source) => blockers.push(sourceYieldBlocker(source)));
 
   const needsReview = [
     ...(reviewRequiredCandidates > 0 ? [`${reviewRequiredCandidates} 位候选需要人工复核。`] : []),
     ...(regulated ? ["高风险项目下，公开候选需完成资质与触达许可复核。"] : []),
     ...(cacheHits.length ? [`${cacheHits.length} 条查询复用了已保存结果。`] : []),
+    ...sourceYield.unmet.map(sourceYieldBlocker),
   ];
+
+  const nextActions = nextActionsForExternalResearch(
+    blockers,
+    regulated,
+    e2PlusCandidates,
+    outreachReadyCandidates,
+    reviewRequiredCandidates,
+  );
+  if (sourceYield.unmet.length) {
+    nextActions.unshift("调整未产出候选的来源搜索词，优先定位个人主页、讲者页或作者页。");
+  }
 
   return {
     passed: blockers.length === 0,
@@ -459,13 +470,7 @@ export function evaluateExternalResearchAcceptance({
     outreachReadyCandidates,
     blockers: unique(blockers),
     needsReview: unique(needsReview),
-    nextActions: nextActionsForExternalResearch(
-      blockers,
-      regulated,
-      e2PlusCandidates,
-      outreachReadyCandidates,
-      reviewRequiredCandidates,
-    ),
+    nextActions: unique(nextActions),
   };
 }
 

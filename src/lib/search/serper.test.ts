@@ -179,6 +179,21 @@ describe("searchGitHubMaintainers", () => {
       if (url.pathname === "/users/ada-fastapi/events/public") {
         return Response.json([{ type: "PushEvent", created_at: "2026-07-15T12:00:00Z" }]);
       }
+      if (url.pathname === "/search/issues") {
+        expect(url.searchParams.get("q")).toBe("repo:fastapi/fastapi is:pr reviewed-by:ada-fastapi");
+        expect(url.searchParams.get("per_page")).toBe("1");
+        return Response.json({
+          total_count: 17,
+          incomplete_results: false,
+          items: [
+            {
+              number: 1234,
+              title: "Review authentication handling",
+              html_url: "https://github.com/fastapi/fastapi/pull/1234",
+            },
+          ],
+        });
+      }
       return new Response("not found", { status: 404 });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -194,6 +209,8 @@ describe("searchGitHubMaintainers", () => {
     expect(results[0].snippet).toContain("fastapi/fastapi");
     expect(results[0].snippet).toContain("240 contributions");
     expect(results[0].snippet).toContain("Recent public activity: 2026-07-15T12:00:00Z");
+    expect(results[0].snippet).toContain("reviewed 17 pull requests in fastapi/fastapi");
+    expect(results[0].snippet).toContain("https://github.com/fastapi/fastapi/pull/1234");
   });
 
   it("builds a bounded repository query from technology signals", () => {

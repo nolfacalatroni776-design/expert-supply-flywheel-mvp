@@ -38,7 +38,11 @@ import { prisma } from "@/lib/prisma";
 import { assessProjectAnalysisQuality, normalizeProjectAnalysis } from "@/lib/project-analysis";
 import { redactSensitiveText } from "@/lib/redaction";
 import { serializeProjectForGeneration, serializeSearchResult } from "@/lib/serializers";
-import { getCompatibleCachedQueries, sourceProjectCandidates } from "@/lib/sourcing";
+import {
+  getCompatibleCachedQueries,
+  shouldBypassSearchCache,
+  sourceProjectCandidates,
+} from "@/lib/sourcing";
 import {
   getCandidateEvidenceEnrichmentQueries,
   runCandidateEvidenceEnrichment,
@@ -1468,12 +1472,14 @@ async function buildPreflight(intent: string, project: Project & { candidates: u
 
 async function buildContextSnapshot(project: Project & { candidates: unknown[]; marketingPosts: unknown[]; supplyGaps: unknown[] }) {
   const searchQueries = parseJson<string[]>(project.searchQueriesJson, []).filter(Boolean);
-  const cacheHits = await prisma.searchCache.count({
-    where: {
-      query: { in: searchQueries.slice(0, 4) },
-      expiresAt: { gt: new Date() },
-    },
-  });
+  const cacheHits = shouldBypassSearchCache()
+    ? 0
+    : await prisma.searchCache.count({
+        where: {
+          query: { in: searchQueries.slice(0, 4) },
+          expiresAt: { gt: new Date() },
+        },
+      });
   return {
     title: project.title,
     status: project.status,
@@ -1510,7 +1516,7 @@ async function buildExternalSearchConfirmation(projectId: string, instruction: s
           directionQueries: buildConfirmationDirectionQueries(project),
           maxQueries: 4,
         });
-  const cachedRows = queries.length
+  const cachedRows = queries.length && !shouldBypassSearchCache()
       ? await prisma.searchCache.findMany({
         where: { query: { in: queries }, expiresAt: { gt: new Date() } },
         select: { query: true, provider: true },

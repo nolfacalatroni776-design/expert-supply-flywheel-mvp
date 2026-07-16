@@ -98,6 +98,21 @@ type GitHubContributor = {
   contributions?: number;
 };
 
+type GitHubIssueSearchResponse = {
+  total_count?: number;
+  items?: Array<{
+    html_url?: string;
+  }>;
+};
+
+type GitHubPersonEvidence = {
+  login: string;
+  htmlUrl: string;
+  detailUrl?: string;
+  evidence: string[];
+  repositories: string[];
+};
+
 export async function searchSerper(query: string): Promise<NormalizedSearchResult[]> {
   const apiKey = process.env.SERPER_API_KEY;
   if (!apiKey) {
@@ -197,10 +212,7 @@ export async function searchGitHubMaintainers(query: string): Promise<Normalized
   const response = await fetch(searchUrl, { headers: githubHeaders() });
   if (!response.ok) throw new Error(`GitHub repository search failed with HTTP ${response.status}.`);
   const body = (await response.json()) as { items?: GitHubRepositorySearchItem[] };
-  const people = new Map<
-    string,
-    { login: string; htmlUrl: string; detailUrl?: string; evidence: string[] }
-  >();
+  const people = new Map<string, GitHubPersonEvidence>();
 
   for (const repository of (body.items ?? []).filter((item) => isGitHubRepositoryRelevant(item, query)).slice(0, 3)) {
     const repositoryName = repository.full_name?.trim();
@@ -213,6 +225,7 @@ export async function searchGitHubMaintainers(query: string): Promise<Normalized
         htmlUrl: repository.owner.html_url,
         detailUrl: repository.owner.url,
         evidence: `Repository evidence: owner of ${repositoryName} (${stars} stars).`,
+        repository: repositoryName,
       });
     }
 
@@ -231,14 +244,16 @@ export async function searchGitHubMaintainers(query: string): Promise<Normalized
         htmlUrl: contributor.html_url,
         detailUrl: contributor.url,
         evidence: `Repository evidence: ${contributions} contributions to ${repositoryName} (${stars} stars).`,
+        repository: repositoryName,
       });
     }
   }
 
+  const selectedPeople = Array.from(people.values()).slice(0, 6);
+  await enrichGitHubReviewEvidence(selectedPeople);
+
   const details = await Promise.all(
-    Array.from(people.values())
-      .slice(0, 6)
-      .map(async (person): Promise<GitHubUserDetail> => {
+    selectedPeople.map(async (person): Promise<GitHubUserDetail> => {
         const recentActivityAt = await fetchGitHubRecentActivity(person.login);
         if (!person.detailUrl) {
           return {
@@ -267,7 +282,7 @@ export async function searchGitHubMaintainers(query: string): Promise<Normalized
           recentActivityAt,
           maintainerEvidence: person.evidence,
         };
-      }),
+    }),
   );
 
   return normalizeGitHubUserResults(details);
@@ -367,13 +382,14 @@ function extractGitHubRepositoryTerms(query: string) {
 }
 
 function addGitHubPersonSignal(
-  people: Map<string, { login: string; htmlUrl: string; detailUrl?: string; evidence: string[] }>,
-  signal: { login: string; htmlUrl: string; detailUrl?: string; evidence: string },
+  people: Map<string, GitHubPersonEvidence>,
+  signal: { login: string; htmlUrl: string; detailUrl?: string; evidence: string; repository: string },
 ) {
   const key = signal.login.toLowerCase();
   const existing = people.get(key);
   if (existing) {
     if (!existing.evidence.includes(signal.evidence)) existing.evidence.push(signal.evidence);
+    if (!existing.repositories.includes(signal.repository)) existing.repositories.push(signal.repository);
     return;
   }
   people.set(key, {
@@ -381,7 +397,55 @@ function addGitHubPersonSignal(
     htmlUrl: signal.htmlUrl,
     detailUrl: signal.detailUrl,
     evidence: [signal.evidence],
+    repositories: [signal.repository],
   });
+}
+
+async function enrichGitHubReviewEvidence(people: GitHubPersonEvidence[]) {
+  const targets = people
+    .flatMap((person) => person.repositories.map((repository) => ({ person, repository })))
+    .slice(0, 3);
+
+  for (const { person, repository } of targets) {
+    const evidence = await fetchGitHubReviewEvidence(person.login, repository);
+    if (evidence && !person.evidence.includes(evidence)) person.evidence.push(evidence);
+  }
+}
+
+async function fetchGitHubReviewEvidence(login: string, repository: string) {
+  if (!/^[A-Za-z0-9_.-]+$/.test(login) || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    return null;
+  }
+
+  try {
+    const url = new URL("https://api.github.com/search/issues");
+    url.searchParams.set("q", `repo:${repository} is:pr reviewed-by:${login}`);
+    url.searchParams.set("sort", "updated");
+    url.searchParams.set("order", "desc");
+    url.searchParams.set("per_page", "1");
+    const response = await fetch(url, { headers: githubHeaders() });
+    if (!response.ok) return null;
+    const body = (await response.json()) as GitHubIssueSearchResponse;
+    const total = typeof body.total_count === "number" ? Math.max(0, Math.floor(body.total_count)) : 0;
+    const exampleUrl = body.items?.[0]?.html_url?.trim() ?? "";
+    if (total < 1 || !isRepositoryPullRequestUrl(exampleUrl, repository)) return null;
+    return `Code review evidence: reviewed ${total} pull requests in ${repository}. Example review: ${exampleUrl}.`;
+  } catch {
+    return null;
+  }
+}
+
+function isRepositoryPullRequestUrl(value: string, repository: string) {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.hostname.toLowerCase() === "github.com" &&
+      url.pathname.toLowerCase().startsWith(`/${repository.toLowerCase()}/pull/`)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function githubHeaders() {

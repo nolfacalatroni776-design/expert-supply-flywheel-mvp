@@ -7,6 +7,11 @@ describe("live production flow smoke script", () => {
     const source = readFileSync(join(process.cwd(), "scripts/live-production-flow.ts"), "utf8");
 
     expect(source).toContain("LIVE_FLOW_ALLOW_EXTERNAL_SEARCH");
+    expect(source).toContain("LIVE_FLOW_REQUIRE_NETWORK_SEARCH");
+    expect(source).toContain('process.env.SEARCH_CACHE_BYPASS = "1"');
+    expect(source).toContain("assessLiveAgentRun");
+    expect(source).toContain("assessLiveExternalSearch");
+    expect(source).toContain("realExternalSearchExecuted");
     expect(source).toContain("confirmAgentTaskRun");
     expect(source).toContain("generateOutreachDraftOnly");
     expect(source).toContain("Outreach draft only; no email is sent.");
@@ -18,6 +23,7 @@ describe("live production flow smoke script", () => {
     expect(source).toContain('JSON.stringify({ status: "approved" })');
     expect(source).toContain('JSON.stringify({ status: "published" })');
     expect(source).not.toContain("if (process.env[key]) continue;");
+    expect(source).not.toContain("function isGoodTerminal");
     expect(source).not.toMatch(/\bsend(Mail|Email)\s*\(/i);
     expect(source).not.toContain("smtp");
   });

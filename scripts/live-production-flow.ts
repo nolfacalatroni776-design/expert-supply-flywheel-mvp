@@ -1,5 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import {
+  assessLiveAgentRun,
+  assessLiveExternalSearch,
+  type LiveExternalSearchAssessment,
+} from "../src/lib/live-production-acceptance";
 
 type Checkpoint = {
   name: string;
@@ -19,9 +24,12 @@ async function main() {
   loadLocalEnv();
   requireConfiguredEnv();
   process.env.ENABLE_RUNTIME_DB_INIT ??= "1";
+  const requireNetworkSearch = process.env.LIVE_FLOW_REQUIRE_NETWORK_SEARCH === "1";
+  if (requireNetworkSearch) process.env.SEARCH_CACHE_BYPASS = "1";
 
   const { prisma } = (await import("../src/lib/prisma")) as PrismaModule;
   const runtime = (await import("../src/lib/agent-runtime")) as AgentRuntime;
+  let externalSearchAssessment: LiveExternalSearchAssessment | null = null;
 
   try {
     const cleanup = await cleanupLiveFlowData(prisma);
@@ -35,14 +43,19 @@ async function main() {
       instruction: "真实生产验收：补齐画像、召回内部专家、分析缺口、确认后执行外部搜索、抽取候选并排序。",
       confirmExternalSearch: true,
     });
-    checkpoint("full sourcing agent", isGoodTerminal(fullRun.status), `Run ended as ${fullRun.status}.`, {
+    const fullRunAssessment = assessLiveAgentRun({
+      status: fullRun.status,
+      failed: readStringList(fullRun.report?.failed),
+    });
+    checkpoint("full sourcing agent", fullRunAssessment.ok, `Run ended as ${fullRun.status}.`, {
       runId: fullRun.id,
       report: fullRun.report,
+      acceptanceReasons: fullRunAssessment.reasons,
     });
 
     const postSourcing = await collectProjectSnapshot(prisma);
     const externalSummary = readLatestExternalSummary(postSourcing.supplySearchRuns);
-    checkpoint("external search executed", postSourcing.externalRuns > 0 && postSourcing.searchResults > 0, "External search wrote run and result records.", {
+    checkpoint("external search records", postSourcing.externalRuns > 0 && postSourcing.searchResults > 0, "External search wrote run and result records.", {
       externalRuns: postSourcing.externalRuns,
       searchResults: postSourcing.searchResults,
       externalCandidates: postSourcing.externalCandidates,
@@ -50,6 +63,34 @@ async function main() {
       cacheHits: externalSummary.cacheHits,
       acceptance: externalSummary.acceptance,
     });
+    const externalAcceptance = readRecord(externalSummary.acceptance);
+    const providerStats = readNumberRecord(externalSummary.providerStats);
+    externalSearchAssessment = assessLiveExternalSearch({
+      externalRuns: postSourcing.externalRuns,
+      searchResults: postSourcing.searchResults,
+      externalCandidates: postSourcing.externalCandidates,
+      requireNetworkCall: requireNetworkSearch,
+      acceptance: {
+        passed: externalAcceptance.passed === true,
+        uncached: numberValue(externalAcceptance.uncached),
+        hardRequirementReadyCandidates: numberValue(externalAcceptance.hardRequirementReadyCandidates),
+        blockers: readStringList(externalAcceptance.blockers),
+      },
+      providerStats,
+    });
+    checkpoint(
+      "external search acceptance",
+      externalSearchAssessment.ok,
+      externalSearchAssessment.ok
+        ? "External candidates passed the project gates and the required provider boundary was verified."
+        : externalSearchAssessment.reasons.join(" "),
+      {
+        networkCallRequired: requireNetworkSearch,
+        networkCallVerified: externalSearchAssessment.networkCallVerified,
+        providers: externalSearchAssessment.providers,
+        reasons: externalSearchAssessment.reasons,
+      },
+    );
     const externalCandidateQuality = evaluateExternalCandidateAudit(postSourcing.externalCandidateAudit);
     checkpoint("external candidate quality", externalCandidateQuality.issues.length === 0, "External candidates passed per-person evidence and review gates.", {
       candidateCount: postSourcing.externalCandidateAudit.length,
@@ -104,9 +145,14 @@ async function main() {
       instruction: "真实生产验收：生成多渠道专家招募内容，进入人工复核，不自动外发。",
       confirmExternalSearch: false,
     });
-    checkpoint("marketing agent", isGoodTerminal(marketingRun.status), `Run ended as ${marketingRun.status}.`, {
+    const marketingAssessment = assessLiveAgentRun({
+      status: marketingRun.status,
+      failed: readStringList(marketingRun.report?.failed),
+    });
+    checkpoint("marketing agent", marketingAssessment.ok, `Run ended as ${marketingRun.status}.`, {
       runId: marketingRun.id,
       report: marketingRun.report,
+      acceptanceReasons: marketingAssessment.reasons,
     });
 
     const marketingProgress = await approveOneMarketingPostInternally(prisma);
@@ -118,9 +164,14 @@ async function main() {
       instruction: "真实生产验收：基于本轮候选、渠道内容、试标记录生成复盘。",
       confirmExternalSearch: false,
     });
-    checkpoint("retrospective agent", isGoodTerminal(retrospectiveRun.status), `Run ended as ${retrospectiveRun.status}.`, {
+    const retrospectiveAssessment = assessLiveAgentRun({
+      status: retrospectiveRun.status,
+      failed: readStringList(retrospectiveRun.report?.failed),
+    });
+    checkpoint("retrospective agent", retrospectiveAssessment.ok, `Run ended as ${retrospectiveRun.status}.`, {
       runId: retrospectiveRun.id,
       report: retrospectiveRun.report,
+      acceptanceReasons: retrospectiveAssessment.reasons,
     });
 
     const finalSnapshot = await collectProjectSnapshot(prisma);
@@ -132,7 +183,7 @@ async function main() {
       retrospectiveOutcomes: finalSnapshot.retrospectiveOutcomes,
     });
 
-    const report = buildReport(finalSnapshot);
+    const report = buildReport(finalSnapshot, externalSearchAssessment);
     writeReport(report);
     printSummary(report);
     if (report.checkpoints.some((item) => !item.ok)) process.exitCode = 1;
@@ -418,6 +469,28 @@ function safeStringArray(value: string) {
   }
 }
 
+function readStringList(value: unknown) {
+  return Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : [];
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function readNumberRecord(value: unknown) {
+  const input = readRecord(value);
+  return Object.fromEntries(
+    Object.entries(input)
+      .map(([key, count]) => [key, Number(count)] as const)
+      .filter(([, count]) => Number.isFinite(count) && count >= 0),
+  );
+}
+
+function numberValue(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function sanitizeEvidenceSnippet(value: string) {
   return value
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[公开联系信息已隐藏]")
@@ -578,15 +651,18 @@ function checkpoint(name: string, ok: boolean, detail: string, data?: Record<str
   console.log(`${ok ? "PASS" : "FAIL"} ${name}: ${detail}`);
 }
 
-function isGoodTerminal(status: string) {
-  return status === "succeeded" || status === "partially_succeeded";
-}
-
-function buildReport(finalSnapshot: Awaited<ReturnType<typeof collectProjectSnapshot>>) {
+function buildReport(
+  finalSnapshot: Awaited<ReturnType<typeof collectProjectSnapshot>>,
+  externalSearchAssessment: LiveExternalSearchAssessment | null,
+) {
   return {
     projectId,
     generatedAt: new Date().toISOString(),
     realExternalSearchEnabled: process.env.LIVE_FLOW_ALLOW_EXTERNAL_SEARCH === "1",
+    externalSearchNetworkRequired: process.env.LIVE_FLOW_REQUIRE_NETWORK_SEARCH === "1",
+    realExternalSearchExecuted: externalSearchAssessment?.networkCallVerified ?? false,
+    externalSearchProviders: externalSearchAssessment?.providers ?? [],
+    externalSearchAcceptance: externalSearchAssessment,
     emailSent: false,
     externalSocialPostSent: false,
     checkpoints,
@@ -607,7 +683,7 @@ function buildReport(finalSnapshot: Awaited<ReturnType<typeof collectProjectSnap
   };
 }
 
-function writeReport(report: ReturnType<typeof buildReport>) {
+function writeReport(report: { projectId: string; generatedAt: string; [key: string]: unknown }) {
   const outputDir = resolve(process.cwd(), "../../outputs");
   mkdirSync(outputDir, { recursive: true });
   const outputPath = join(outputDir, `live-production-flow-${runStamp}.json`);
@@ -624,6 +700,8 @@ function printSummary(report: ReturnType<typeof buildReport>) {
         passed: failed.length === 0,
         failed: failed.map((item) => item.name),
         finalSnapshot: report.finalSnapshot,
+        realExternalSearchExecuted: report.realExternalSearchExecuted,
+        externalSearchProviders: report.externalSearchProviders,
         emailSent: report.emailSent,
         externalSocialPostSent: report.externalSocialPostSent,
       },
@@ -639,11 +717,15 @@ main().catch((error) => {
     projectId,
     generatedAt: new Date().toISOString(),
     realExternalSearchEnabled: process.env.LIVE_FLOW_ALLOW_EXTERNAL_SEARCH === "1",
+    externalSearchNetworkRequired: process.env.LIVE_FLOW_REQUIRE_NETWORK_SEARCH === "1",
+    realExternalSearchExecuted: false,
+    externalSearchProviders: [],
+    externalSearchAcceptance: null,
     emailSent: false,
     externalSocialPostSent: false,
     checkpoints,
   };
-  writeReport(report as ReturnType<typeof buildReport>);
+  writeReport(report);
   process.exit(1);
 });
 
