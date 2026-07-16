@@ -70,7 +70,7 @@ Recommended public trial options:
 For a public runtime deployment:
 
 1. Choose one production access mode:
-   - Public trial: set `PUBLIC_TRIAL_ACCESS=1`. The homepage and APIs are anonymously accessible.
+   - Public trial: set `PUBLIC_TRIAL_ACCESS=1`. All application pages and matched API routes are anonymously accessible.
    - Protected trial: keep `PUBLIC_TRIAL_ACCESS=0` and set both `TRIAL_BASIC_AUTH_USER` and `TRIAL_BASIC_AUTH_PASSWORD`.
    - Production fails closed when public mode is off and the Basic Auth credentials are incomplete.
 2. Do not upload `.env.local`, `.env`, `prisma/dev.db`, `.next`, or `node_modules`.
@@ -78,7 +78,14 @@ For a public runtime deployment:
 4. Build with `npm run build`.
 5. Start with `npm run start`.
 
-Public mode exposes project, candidate, review-queue, and mutation APIs without authentication. Use it only for data that is safe to share publicly, and monitor external API quota consumption.
+Public trial risk: public mode removes authentication from all application pages and matched API routes. It can expose stored projects, expert and contact data, candidate evidence, outreach and marketing drafts, trial records, and audit or workflow state. Any internet user can also create or update records and invoke AI or search operations that consume external quota. Enable this mode only with data and operations that are intentionally safe for anonymous public access.
+
+To roll back from public to protected access:
+
+1. Retain or configure valid `TRIAL_BASIC_AUTH_USER` and `TRIAL_BASIC_AUTH_PASSWORD` credentials in production.
+2. Set `PUBLIC_TRIAL_ACCESS=0` or remove the variable.
+3. Redeploy or restart the production application.
+4. Send unauthenticated requests to the homepage and a matched API route such as `/api/projects`, and verify that both return `401 Unauthorized`. Do not consider the rollback complete until this check passes.
 
 The included `vercel.json` build command maps Vercel Neon integration variables such as `product_POSTGRES_PRISMA_URL` into `DATABASE_URL`, runs `prisma migrate deploy`, then builds the Next.js app. This keeps Vercel deployments on persistent Neon storage instead of temporary serverless files.
 
