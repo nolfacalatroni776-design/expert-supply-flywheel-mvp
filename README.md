@@ -40,6 +40,7 @@ SERPER_API_KEY="..."
 DASHSCOPE_API_KEY="..."
 SEARCH_CACHE_TTL_HOURS="168"
 SEARCH_FALLBACK_PROVIDERS="openalex,github"
+PUBLIC_TRIAL_ACCESS="0"
 TRIAL_BASIC_AUTH_USER="internal-ops-user"
 TRIAL_BASIC_AUTH_PASSWORD="use-a-long-random-password"
 ```
@@ -68,11 +69,16 @@ Recommended public trial options:
 
 For a public runtime deployment:
 
-1. Set the environment variables from `.env.example` in the hosting provider. Production access fails closed unless both `TRIAL_BASIC_AUTH_USER` and `TRIAL_BASIC_AUTH_PASSWORD` are configured.
+1. Choose one production access mode:
+   - Public trial: set `PUBLIC_TRIAL_ACCESS=1`. The homepage and APIs are anonymously accessible.
+   - Protected trial: keep `PUBLIC_TRIAL_ACCESS=0` and set both `TRIAL_BASIC_AUTH_USER` and `TRIAL_BASIC_AUTH_PASSWORD`.
+   - Production fails closed when public mode is off and the Basic Auth credentials are incomplete.
 2. Do not upload `.env.local`, `.env`, `prisma/dev.db`, `.next`, or `node_modules`.
 3. Run `npm install`, `npm run prisma:generate`, `npm run prisma:migrate:deploy`, and optionally `npm run db:seed`.
 4. Build with `npm run build`.
 5. Start with `npm run start`.
+
+Public mode exposes project, candidate, review-queue, and mutation APIs without authentication. Use it only for data that is safe to share publicly, and monitor external API quota consumption.
 
 The included `vercel.json` build command maps Vercel Neon integration variables such as `product_POSTGRES_PRISMA_URL` into `DATABASE_URL`, runs `prisma migrate deploy`, then builds the Next.js app. This keeps Vercel deployments on persistent Neon storage instead of temporary serverless files.
 

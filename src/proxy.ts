@@ -4,7 +4,13 @@ import { resolveAccessProtection } from "@/lib/access-protection";
 export function proxy(request: NextRequest) {
   const user = process.env.TRIAL_BASIC_AUTH_USER;
   const password = process.env.TRIAL_BASIC_AUTH_PASSWORD;
-  const protection = resolveAccessProtection({ environment: process.env.NODE_ENV, user, password });
+  const publicAccess = process.env.PUBLIC_TRIAL_ACCESS;
+  const protection = resolveAccessProtection({
+    environment: process.env.NODE_ENV,
+    user,
+    password,
+    publicAccess,
+  });
 
   if (protection === "disabled") {
     return NextResponse.next();
