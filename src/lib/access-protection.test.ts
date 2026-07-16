@@ -14,7 +14,7 @@ describe("resolveAccessProtection", () => {
     expect(resolveAccessProtection({ environment: "production", user: "ops", password: "secret" })).toBe("enabled");
   });
 
-  it.each(["1", "true", " TRUE "])("allows explicit public production access with %j", (publicAccess) => {
+  it.each(["1", "true", " TRUE ", "TrUe"])("allows explicit public production access with %j", (publicAccess) => {
     expect(
       resolveAccessProtection({
         environment: "production",
@@ -35,4 +35,18 @@ describe("resolveAccessProtection", () => {
       }),
     ).toBe("enabled");
   });
+
+  it.each(["0", "false", "yes", "", "   "])(
+    "fails closed in production with invalid public access %j and missing credentials",
+    (publicAccess) => {
+      expect(
+        resolveAccessProtection({
+          environment: "production",
+          user: "",
+          password: "",
+          publicAccess,
+        }),
+      ).toBe("misconfigured");
+    },
+  );
 });
